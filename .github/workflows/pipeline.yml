@@ -1,0 +1,212 @@
+name: TIMON SIM pipeline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: timon-sim-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18.6-alpine3.24
+        env:
+          POSTGRES_DB: timon_sim_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d timon_sim_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      SIM_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/timon_sim_test?sslmode=disable
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          unformatted="$(gofmt -l ./cmd ./internal)"
+          if [[ -n "$unformatted" ]]; then
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build Linux binaries
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p release/api release/bot
+          go build -trimpath -ldflags="-s -w" -o release/api/sim-api ./cmd/sim-api
+          go build -trimpath -ldflags="-s -w" -o release/api/sim-migrate ./cmd/sim-migrate
+          go build -trimpath -ldflags="-s -w" -o release/bot/sim-bot ./cmd/sim-bot
+
+      - name: Upload API artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-api-${{ github.sha }}
+          path: release/api
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload bot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sim-bot-${{ github.sha }}
+          path: release/bot
+          if-no-files-found: error
+          retention-days: 14
+
+  deploy-api:
+    needs: quality
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || vars.STAGING_DEPLOY_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Download API artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: sim-api-${{ github.sha }}
+          path: release
+
+      - name: Prepare API release
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.API_DEPLOY_HOST }}
+          username: ${{ secrets.API_DEPLOY_USER }}
+          key: ${{ secrets.API_DEPLOY_SSH_KEY }}
+          script: mkdir -p /opt/timon-platform/api/releases/${{ github.sha }}
+
+      - name: Upload API release
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.API_DEPLOY_HOST }}
+          username: ${{ secrets.API_DEPLOY_USER }}
+          key: ${{ secrets.API_DEPLOY_SSH_KEY }}
+          source: release/*
+          target: /opt/timon-platform/api/releases/${{ github.sha }}
+          strip_components: 1
+
+      - name: Activate API release
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.API_DEPLOY_HOST }}
+          username: ${{ secrets.API_DEPLOY_USER }}
+          key: ${{ secrets.API_DEPLOY_SSH_KEY }}
+          script: |
+            set -eu
+            release=/opt/timon-platform/api/releases/${{ github.sha }}
+            current=/opt/timon-platform/api/current
+            previous="$(readlink -f "$current" 2>/dev/null || true)"
+            rollback() {
+              trap - ERR
+              if [ -n "$previous" ] && [ -x "$previous/sim-api" ]; then
+                ln -sfn "$previous" "$current"
+                sudo systemctl restart timon-sim-api || true
+              fi
+            }
+            trap rollback ERR
+            chmod 0755 "$release/sim-api" "$release/sim-migrate"
+            ln -sfn "$release" "$current"
+            sudo systemctl start timon-sim-migrate
+            sudo systemctl restart timon-sim-api
+            healthy=false
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8182/healthz >/dev/null; then
+                healthy=true
+                break
+              fi
+              sleep 2
+            done
+            test "$healthy" = true
+            trap - ERR
+            systemctl is-active --quiet timon-sim-api
+
+  deploy-bot:
+    needs:
+      - quality
+      - deploy-api
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Download bot artifact
+        uses: actions/download-artifact@v5
+        with:
+          name: sim-bot-${{ github.sha }}
+          path: release
+
+      - name: Prepare bot release
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.BOT_DEPLOY_HOST }}
+          username: ${{ secrets.BOT_DEPLOY_USER }}
+          key: ${{ secrets.BOT_DEPLOY_SSH_KEY }}
+          script: mkdir -p /opt/timon-platform/bot/releases/${{ github.sha }}
+
+      - name: Upload bot release
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.BOT_DEPLOY_HOST }}
+          username: ${{ secrets.BOT_DEPLOY_USER }}
+          key: ${{ secrets.BOT_DEPLOY_SSH_KEY }}
+          source: release/*
+          target: /opt/timon-platform/bot/releases/${{ github.sha }}
+          strip_components: 1
+
+      - name: Activate bot release
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.BOT_DEPLOY_HOST }}
+          username: ${{ secrets.BOT_DEPLOY_USER }}
+          key: ${{ secrets.BOT_DEPLOY_SSH_KEY }}
+          script: |
+            set -eu
+            release=/opt/timon-platform/bot/releases/${{ github.sha }}
+            current=/opt/timon-platform/bot/current
+            previous="$(readlink -f "$current" 2>/dev/null || true)"
+            rollback() {
+              trap - ERR
+              if [ -n "$previous" ] && [ -x "$previous/sim-bot" ]; then
+                ln -sfn "$previous" "$current"
+                sudo systemctl restart timon-sim-bot || true
+              fi
+            }
+            trap rollback ERR
+            chmod 0755 "$release/sim-bot"
+            ln -sfn "$release" "$current"
+            sudo systemctl restart timon-sim-bot
+            sleep 5
+            systemctl is-active --quiet timon-sim-bot
+            main_pid="$(systemctl show timon-sim-bot --property MainPID --value)"
+            test "$main_pid" -gt 0
+            trap - ERR

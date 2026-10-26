@@ -1,0 +1,32 @@
+[Unit]
+Description=TIMON SIM API (closed mock staging)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=timon-sim
+Group=timon-sim
+WorkingDirectory=/opt/timon-platform/api/current
+EnvironmentFile=/opt/timon-platform/api/shared/.env
+ExecStart=/opt/timon-platform/api/current/sim-api
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=384M
+CPUQuota=50%
+TasksMax=128
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
