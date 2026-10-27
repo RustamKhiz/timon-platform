@@ -1,7 +1,7 @@
 [Unit]
 Description=TIMON SIM Telegram Bot (closed mock staging)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target timon-sim-api-tunnel.service
+Wants=network-online.target timon-sim-api-tunnel.service
 
 [Service]
 Type=simple

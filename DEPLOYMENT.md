@@ -7,8 +7,9 @@ This repository deploys an allowlisted mock-only staging environment. It does no
 - `sim-api`: Timeweb VPS, systemd service `timon-sim-api`, loopback `127.0.0.1:8182`.
 - PostgreSQL: dedicated `timon_sim` role/database in an isolated PostgreSQL 18 container; never the VPN database.
 - `sim-bot`: NL VPS, systemd service `timon-sim-bot`, one long-polling replica.
+- Bot-to-API transport: a dedicated `timon-sim-api-tunnel` systemd service on NL forwards only `127.0.0.1:18082` to the Timeweb API loopback over SSH.
 - Secrets: root-readable environment files outside Git.
-- Public path: restricted HTTPS route from the fixed NL VPS IP to the API; no public database port.
+- Public path: none. Neither the API nor the database has a public listening port.
 
 ## GitHub staging configuration
 
@@ -40,7 +41,7 @@ SIM_FIXED_MARKUP_RUB=100
 5. Install the two systemd units from `deploy/systemd`.
 6. Start the root-managed PostgreSQL stack from `deploy/postgres/compose.yaml`. It binds port `55432` to loopback only; never expose it externally.
 7. Add narrowly scoped sudo rules for the deploy user: start `timon-sim-migrate`, restart/status `timon-sim-api` and no other product service.
-8. Add a separate restricted HTTPS Nginx route for the NL VPS, validate with `nginx -t`, then reload. Do not edit existing VPN locations inline without a saved rollback copy.
+8. Add the dedicated tunnel public key to `/home/deploy/.ssh/authorized_keys` with `no-agent-forwarding,no-X11-forwarding,no-pty,permitopen="127.0.0.1:8182"`. Do not grant shell commands or access to any VPN service through this key.
 
 ## NL one-time setup
 
@@ -51,18 +52,20 @@ SIM_FIXED_MARKUP_RUB=100
 ```env
 TELEGRAM_BOT_TOKEN=<test bot token>
 TELEGRAM_ALLOWED_USER_IDS=<closed allowlist>
-SIM_API_URL=https://<restricted staging route>
+SIM_API_URL=http://127.0.0.1:18082
 SIM_API_TOKEN=<same bot-to-api secret as the API>
 ```
 
-4. Install `deploy/systemd/timon-sim-bot.service` and add narrowly scoped sudo permission to restart/status only this unit.
-5. Keep exactly one bot replica. Its durable Telegram offset is stored in `/var/lib/timon-sim-bot/update.offset`.
+4. Store the dedicated tunnel private key and pinned Timeweb host key under `/etc/timon-sim/`, readable only by `timon-sim`.
+5. Install `deploy/systemd/timon-sim-api-tunnel.service` and `deploy/systemd/timon-sim-bot.service`; enable the tunnel and add narrowly scoped deploy sudo permission to restart/status only these two units.
+6. Keep exactly one bot replica. Its durable Telegram offset is stored in `/var/lib/timon-sim-bot/update.offset`.
 
 ## Validation
 
 - CI passes formatting, race tests, PostgreSQL integration and Linux builds.
 - API health reports `storage=postgres`.
 - API rejects missing bearer credentials.
+- The NL tunnel listens only on `127.0.0.1:18082`, reconnects after either host restarts and cannot forward to any other Timeweb destination.
 - Bot `getMe` succeeds without logging the token or full URL.
 - `/start`, purchase flow and `My eSIMs` work for an allowlisted user after API and bot restarts.
 - VPN API/site/bot and both Amnezia containers remain healthy.
