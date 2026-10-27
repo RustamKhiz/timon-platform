@@ -7,7 +7,7 @@ Wants=network-online.target timon-sim-api.service
 Type=simple
 User=timon-sim-tunnel
 Group=timon-sim-tunnel
-ExecStart=/usr/bin/ssh -N -T -i /etc/timon-sim/nl-tunnel -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/timon-sim/nl-known-hosts -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -R 127.0.0.1:18082:127.0.0.1:8182 deploy@78.17.28.128
+ExecStart=/usr/bin/ssh -N -T -i /etc/timon-sim/nl-tunnel -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/timon-sim/nl-known-hosts -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -R 127.0.0.1:18082:127.0.0.1:8182 deploy@78.17.28.128
 Restart=always
 RestartSec=5
 TimeoutStopSec=10

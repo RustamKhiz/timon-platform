@@ -125,7 +125,7 @@ jobs:
           EOF
           printf 'POSTGRES_PASSWORD=%s\n' "$SIM_DATABASE_PASSWORD" >release-config/postgres.env
           cp deploy/postgres/compose.yaml release-config/compose.yaml
-          printf '%s\n' "$SIM_TUNNEL_SSH_KEY" >release-config/nl-tunnel
+          printf '%s\n' "$SIM_TUNNEL_SSH_KEY" | tr -d '\r' >release-config/nl-tunnel
           printf '%s\n' "$SIM_TUNNEL_KNOWN_HOSTS" >release-config/nl-known-hosts
           cp deploy/systemd/timon-sim-api-reverse-tunnel.service release-config/
 
@@ -240,9 +240,13 @@ jobs:
             release=/opt/timon-platform/bot/releases/${{ github.sha }}
             current=/opt/timon-platform/bot/current
             previous="$(readlink -f "$current" 2>/dev/null || true)"
+            was_active=false
+            if systemctl is-active --quiet timon-sim-bot; then
+              was_active=true
+            fi
             rollback() {
               trap - ERR
-              if [ -n "$previous" ] && [ -x "$previous/sim-bot" ]; then
+              if [ "$was_active" = true ] && [ -n "$previous" ] && [ -x "$previous/sim-bot" ]; then
                 ln -sfn "$previous" "$current"
                 sudo systemctl restart timon-sim-bot || true
               fi
