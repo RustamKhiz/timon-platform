@@ -93,14 +93,14 @@ jobs:
     runs-on: ubuntu-latest
     environment: staging
     steps:
+      - name: Checkout deployment configuration
+        uses: actions/checkout@v5
+
       - name: Download API artifact
         uses: actions/download-artifact@v5
         with:
           name: sim-api-${{ github.sha }}
           path: release
-
-      - name: Checkout deployment configuration
-        uses: actions/checkout@v5
 
       - name: Prepare sealed API configuration
         shell: bash
