@@ -35,7 +35,6 @@ services:
 networks:
   timon_sim_database:
     name: timon_sim_database
-    internal: true
 
 volumes:
   timon_sim_postgres_data:

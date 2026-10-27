@@ -24,8 +24,9 @@ fi
 
 api_source="$resolved/config/api.env"
 postgres_source="$resolved/config/postgres.env"
+compose_source="$resolved/config/compose.yaml"
 
-for source in "$api_source" "$postgres_source"; do
+for source in "$api_source" "$postgres_source" "$compose_source"; do
   if [ ! -f "$source" ] || [ -L "$source" ]; then
     echo "missing or unsafe configuration file: $source" >&2
     exit 66
@@ -40,12 +41,21 @@ install -o root -g timon-sim -m 0640 \
   "$api_source" /opt/timon-platform/api/shared/.env
 install -o root -g root -m 0600 \
   "$postgres_source" /opt/timon-platform/postgres/.env
+install -o root -g root -m 0644 \
+  "$compose_source" /opt/timon-platform/postgres/compose.yaml
 
-rm -f -- "$api_source" "$postgres_source"
+rm -f -- "$api_source" "$postgres_source" "$compose_source"
 rmdir "$resolved/config" 2>/dev/null || true
 
 cd /opt/timon-platform/postgres
 docker compose config --quiet
+
+if docker network inspect timon_sim_database >/dev/null 2>&1 && \
+  [ "$(docker network inspect -f '{{.Internal}}' timon_sim_database)" = "true" ]; then
+  docker compose down
+  docker network rm timon_sim_database >/dev/null 2>&1 || true
+fi
+
 docker compose up -d --wait --wait-timeout 120
 
 if ! ss -ltnH | awk '{print $4}' | grep -qx '127.0.0.1:55432'; then

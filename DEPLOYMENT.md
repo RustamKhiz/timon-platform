@@ -5,7 +5,7 @@ This repository deploys an allowlisted mock-only staging environment. It does no
 ## Runtime layout
 
 - `sim-api`: Timeweb VPS, systemd service `timon-sim-api`, loopback `127.0.0.1:8182`.
-- PostgreSQL: dedicated `timon_sim` role/database in an isolated PostgreSQL 18 container; never the VPN database.
+- PostgreSQL: dedicated `timon_sim` role/database in an isolated PostgreSQL 18 container; never the VPN database. Its dedicated bridge network is not marked `internal`, because Docker does not publish loopback ports from an internal-only network; isolation is enforced by the explicit `127.0.0.1:55432` host binding.
 - `sim-bot`: NL VPS, systemd service `timon-sim-bot`, one long-polling replica.
 - Bot-to-API transport: a dedicated `timon-sim-api-tunnel` systemd service on NL forwards only `127.0.0.1:18082` to the Timeweb API loopback over SSH.
 - Secrets: root-readable environment files outside Git.
@@ -25,9 +25,9 @@ Create a protected `staging` environment with these secrets:
 - `SIM_DATABASE_PASSWORD`
 
 The pipeline renders the API and PostgreSQL environment files on the ephemeral
-GitHub runner, uploads them with the release and removes the uploaded copies
-after installation. Secret values must never be committed or printed in CI
-logs.
+GitHub runner, uploads them together with the tracked PostgreSQL Compose file
+and removes the uploaded copies after installation. Secret values must never
+be committed or printed in CI logs.
 
 The repository variable `STAGING_DEPLOY_ENABLED` defaults to absent/false. Keep it disabled until both servers have completed the one-time setup. A manual workflow dispatch may deploy after that setup; set the variable to `true` only when automatic deployment from `main` is desired.
 

@@ -99,6 +99,9 @@ jobs:
           name: sim-api-${{ github.sha }}
           path: release
 
+      - name: Checkout deployment configuration
+        uses: actions/checkout@v5
+
       - name: Prepare sealed API configuration
         shell: bash
         env:
@@ -117,6 +120,7 @@ jobs:
           SIM_FIXED_MARKUP_RUB=100
           EOF
           printf 'POSTGRES_PASSWORD=%s\n' "$SIM_DATABASE_PASSWORD" >release-config/postgres.env
+          cp deploy/postgres/compose.yaml release-config/compose.yaml
 
       - name: Prepare API release
         uses: appleboy/ssh-action@v1.2.5
@@ -167,6 +171,7 @@ jobs:
             trap rollback ERR
             chmod 0755 "$release/sim-api" "$release/sim-migrate"
             chmod 0600 "$release/config/api.env" "$release/config/postgres.env"
+            chmod 0644 "$release/config/compose.yaml"
             sudo /usr/local/sbin/timon-sim-prepare-runtime "$release"
             ln -sfn "$release" "$current"
             sudo systemctl start timon-sim-migrate
