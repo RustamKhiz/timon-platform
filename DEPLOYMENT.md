@@ -7,7 +7,7 @@ This repository deploys an allowlisted mock-only staging environment. It does no
 - `sim-api`: Timeweb VPS, systemd service `timon-sim-api`, loopback `127.0.0.1:8182`.
 - PostgreSQL: dedicated `timon_sim` role/database in an isolated PostgreSQL 18 container; never the VPN database. Its dedicated bridge network is not marked `internal`, because Docker does not publish loopback ports from an internal-only network; isolation is enforced by the explicit `127.0.0.1:55432` host binding.
 - `sim-bot`: NL VPS, systemd service `timon-sim-bot`, one long-polling replica.
-- Bot-to-API transport: a dedicated `timon-sim-api-tunnel` systemd service on NL forwards only `127.0.0.1:18082` to the Timeweb API loopback over SSH.
+- Bot-to-API transport: Timeweb initiates a dedicated reverse SSH tunnel to NL. The NL endpoint listens only on `127.0.0.1:18082` and forwards to the Timeweb API loopback. This direction avoids the provider route that blocks NL-initiated SSH connections to Timeweb.
 - Secrets: root-readable environment files outside Git.
 - Public path: none. Neither the API nor the database has a public listening port.
 
@@ -23,6 +23,8 @@ Create a protected `staging` environment with these secrets:
 - `BOT_DEPLOY_SSH_KEY`
 - `SIM_API_TOKEN`
 - `SIM_DATABASE_PASSWORD`
+- `SIM_TUNNEL_SSH_KEY`
+- `SIM_TUNNEL_KNOWN_HOSTS`
 
 The pipeline renders the API and PostgreSQL environment files on the ephemeral
 GitHub runner, uploads them together with the tracked PostgreSQL Compose file
@@ -49,7 +51,7 @@ SIM_FIXED_MARKUP_RUB=100
 6. Start the root-managed PostgreSQL stack from `deploy/postgres/compose.yaml`. It binds port `55432` to loopback only; never expose it externally.
 7. Install `deploy/bootstrap/timon-sim-prepare-runtime` as root at `/usr/local/sbin/timon-sim-prepare-runtime`. Allow the deploy user to invoke it only for `/opt/timon-platform/api/releases/*`; the wrapper validates the immutable SHA release path, installs the two environment files with restricted permissions and starts only the dedicated PostgreSQL Compose project.
 8. Add narrowly scoped sudo rules for the deploy user: invoke the runtime wrapper, start `timon-sim-migrate`, restart `timon-sim-api` and no other product service.
-9. Add the dedicated tunnel public key to `/home/deploy/.ssh/authorized_keys` with `restrict,port-forwarding,permitopen="127.0.0.1:8182"`. Do not grant shell commands or access to any VPN service through this key.
+9. Install and enable `timon-sim-api-reverse-tunnel.service` under a dedicated `timon-sim-tunnel` system user. Store its private key and pinned NL host key under `/etc/timon-sim/`, unreadable by the API user.
 
 ## NL one-time setup
 
@@ -64,8 +66,8 @@ SIM_API_URL=http://127.0.0.1:18082
 SIM_API_TOKEN=<same bot-to-api secret as the API>
 ```
 
-4. Store the dedicated tunnel private key and pinned Timeweb host key under `/etc/timon-sim/`, readable only by `timon-sim`.
-5. Install `deploy/systemd/timon-sim-api-tunnel.service` and `deploy/systemd/timon-sim-bot.service`; enable the tunnel and add narrowly scoped deploy sudo permission to restart/status only these two units.
+4. Add the dedicated tunnel public key to the deploy account with `restrict,port-forwarding,permitlisten="127.0.0.1:18082"`. This key accepts only the Timeweb-initiated reverse forward and cannot open a shell.
+5. Install `deploy/systemd/timon-sim-bot.service`; add narrowly scoped deploy sudo permission to restart/status only the SIM bot. The obsolete NL-initiated tunnel unit must remain disabled.
 6. Keep exactly one bot replica. Its durable Telegram offset is stored in `/var/lib/timon-sim-bot/update.offset`.
 
 ## Validation
@@ -73,7 +75,7 @@ SIM_API_TOKEN=<same bot-to-api secret as the API>
 - CI passes formatting, race tests, PostgreSQL integration and Linux builds.
 - API health reports `storage=postgres`.
 - API rejects missing bearer credentials.
-- The NL tunnel listens only on `127.0.0.1:18082`, reconnects after either host restarts and cannot forward to any other Timeweb destination.
+- The reverse tunnel listens only on NL `127.0.0.1:18082`, reconnects after either host restarts and keeps its private key isolated from the API process.
 - Bot `getMe` succeeds without logging the token or full URL.
 - `/start`, purchase flow and `My eSIMs` work for an allowlisted user after API and bot restarts.
 - VPN API/site/bot and both Amnezia containers remain healthy.

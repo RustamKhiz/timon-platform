@@ -107,10 +107,14 @@ jobs:
         env:
           SIM_API_TOKEN: ${{ secrets.SIM_API_TOKEN }}
           SIM_DATABASE_PASSWORD: ${{ secrets.SIM_DATABASE_PASSWORD }}
+          SIM_TUNNEL_SSH_KEY: ${{ secrets.SIM_TUNNEL_SSH_KEY }}
+          SIM_TUNNEL_KNOWN_HOSTS: ${{ secrets.SIM_TUNNEL_KNOWN_HOSTS }}
         run: |
           set -eu
           test -n "$SIM_API_TOKEN"
           test -n "$SIM_DATABASE_PASSWORD"
+          test -n "$SIM_TUNNEL_SSH_KEY"
+          test -n "$SIM_TUNNEL_KNOWN_HOSTS"
           umask 077
           mkdir -p release-config
           cat >release-config/api.env <<EOF
@@ -121,6 +125,9 @@ jobs:
           EOF
           printf 'POSTGRES_PASSWORD=%s\n' "$SIM_DATABASE_PASSWORD" >release-config/postgres.env
           cp deploy/postgres/compose.yaml release-config/compose.yaml
+          printf '%s\n' "$SIM_TUNNEL_SSH_KEY" >release-config/nl-tunnel
+          printf '%s\n' "$SIM_TUNNEL_KNOWN_HOSTS" >release-config/nl-known-hosts
+          cp deploy/systemd/timon-sim-api-reverse-tunnel.service release-config/
 
       - name: Prepare API release
         uses: appleboy/ssh-action@v1.2.5
@@ -171,7 +178,10 @@ jobs:
             trap rollback ERR
             chmod 0755 "$release/sim-api" "$release/sim-migrate"
             chmod 0600 "$release/config/api.env" "$release/config/postgres.env"
+            chmod 0600 "$release/config/nl-tunnel"
+            chmod 0644 "$release/config/nl-known-hosts"
             chmod 0644 "$release/config/compose.yaml"
+            chmod 0644 "$release/config/timon-sim-api-reverse-tunnel.service"
             sudo /usr/local/sbin/timon-sim-prepare-runtime "$release"
             ln -sfn "$release" "$current"
             sudo systemctl start timon-sim-migrate
@@ -240,6 +250,15 @@ jobs:
             trap rollback ERR
             chmod 0755 "$release/sim-bot"
             ln -sfn "$release" "$current"
+            healthy=false
+            for attempt in 1 2 3 4 5 6 7 8 9 10; do
+              if curl --fail --silent --show-error --max-time 5 http://127.0.0.1:18082/healthz >/dev/null; then
+                healthy=true
+                break
+              fi
+              sleep 2
+            done
+            test "$healthy" = true
             sudo systemctl restart timon-sim-bot
             sleep 5
             systemctl is-active --quiet timon-sim-bot
