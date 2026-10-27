@@ -1,0 +1,54 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -ne 1 ]; then
+  echo "usage: timon-sim-prepare-runtime <release-directory>" >&2
+  exit 64
+fi
+
+release="$1"
+release_name="${release##*/}"
+
+if ! printf '%s' "$release_name" | grep -Eq '^[0-9a-f]{40}$'; then
+  echo "invalid release name" >&2
+  exit 65
+fi
+
+expected="/opt/timon-platform/api/releases/$release_name"
+resolved="$(readlink -f -- "$release")"
+
+if [ "$resolved" != "$expected" ]; then
+  echo "release is outside the approved directory" >&2
+  exit 65
+fi
+
+api_source="$resolved/config/api.env"
+postgres_source="$resolved/config/postgres.env"
+
+for source in "$api_source" "$postgres_source"; do
+  if [ ! -f "$source" ] || [ -L "$source" ]; then
+    echo "missing or unsafe configuration file: $source" >&2
+    exit 66
+  fi
+  if [ "$(stat -c '%U' "$source")" != "deploy" ]; then
+    echo "configuration file has unexpected owner: $source" >&2
+    exit 66
+  fi
+done
+
+install -o root -g timon-sim -m 0640 \
+  "$api_source" /opt/timon-platform/api/shared/.env
+install -o root -g root -m 0600 \
+  "$postgres_source" /opt/timon-platform/postgres/.env
+
+rm -f -- "$api_source" "$postgres_source"
+rmdir "$resolved/config" 2>/dev/null || true
+
+cd /opt/timon-platform/postgres
+docker compose config --quiet
+docker compose up -d --wait --wait-timeout 120
+
+if ! ss -ltnH | awk '{print $4}' | grep -qx '127.0.0.1:55432'; then
+  echo "PostgreSQL is not bound exclusively to the expected loopback socket" >&2
+  exit 67
+fi

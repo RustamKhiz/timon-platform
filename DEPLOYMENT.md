@@ -21,6 +21,13 @@ Create a protected `staging` environment with these secrets:
 - `BOT_DEPLOY_HOST`
 - `BOT_DEPLOY_USER`
 - `BOT_DEPLOY_SSH_KEY`
+- `SIM_API_TOKEN`
+- `SIM_DATABASE_PASSWORD`
+
+The pipeline renders the API and PostgreSQL environment files on the ephemeral
+GitHub runner, uploads them with the release and removes the uploaded copies
+after installation. Secret values must never be committed or printed in CI
+logs.
 
 The repository variable `STAGING_DEPLOY_ENABLED` defaults to absent/false. Keep it disabled until both servers have completed the one-time setup. A manual workflow dispatch may deploy after that setup; set the variable to `true` only when automatic deployment from `main` is desired.
 
@@ -40,8 +47,9 @@ SIM_FIXED_MARKUP_RUB=100
 
 5. Install the two systemd units from `deploy/systemd`.
 6. Start the root-managed PostgreSQL stack from `deploy/postgres/compose.yaml`. It binds port `55432` to loopback only; never expose it externally.
-7. Add narrowly scoped sudo rules for the deploy user: start `timon-sim-migrate`, restart/status `timon-sim-api` and no other product service.
-8. Add the dedicated tunnel public key to `/home/deploy/.ssh/authorized_keys` with `no-agent-forwarding,no-X11-forwarding,no-pty,permitopen="127.0.0.1:8182"`. Do not grant shell commands or access to any VPN service through this key.
+7. Install `deploy/bootstrap/timon-sim-prepare-runtime` as root at `/usr/local/sbin/timon-sim-prepare-runtime`. Allow the deploy user to invoke it only for `/opt/timon-platform/api/releases/*`; the wrapper validates the immutable SHA release path, installs the two environment files with restricted permissions and starts only the dedicated PostgreSQL Compose project.
+8. Add narrowly scoped sudo rules for the deploy user: invoke the runtime wrapper, start `timon-sim-migrate`, restart `timon-sim-api` and no other product service.
+9. Add the dedicated tunnel public key to `/home/deploy/.ssh/authorized_keys` with `restrict,port-forwarding,permitopen="127.0.0.1:8182"`. Do not grant shell commands or access to any VPN service through this key.
 
 ## NL one-time setup
 

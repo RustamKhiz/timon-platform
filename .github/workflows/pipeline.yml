@@ -99,13 +99,32 @@ jobs:
           name: sim-api-${{ github.sha }}
           path: release
 
+      - name: Prepare sealed API configuration
+        shell: bash
+        env:
+          SIM_API_TOKEN: ${{ secrets.SIM_API_TOKEN }}
+          SIM_DATABASE_PASSWORD: ${{ secrets.SIM_DATABASE_PASSWORD }}
+        run: |
+          set -eu
+          test -n "$SIM_API_TOKEN"
+          test -n "$SIM_DATABASE_PASSWORD"
+          umask 077
+          mkdir -p release-config
+          cat >release-config/api.env <<EOF
+          SIM_API_ADDR=127.0.0.1:8182
+          SIM_API_TOKEN=$SIM_API_TOKEN
+          SIM_DATABASE_URL=postgresql://timon_sim:$SIM_DATABASE_PASSWORD@127.0.0.1:55432/timon_sim?sslmode=disable
+          SIM_FIXED_MARKUP_RUB=100
+          EOF
+          printf 'POSTGRES_PASSWORD=%s\n' "$SIM_DATABASE_PASSWORD" >release-config/postgres.env
+
       - name: Prepare API release
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.API_DEPLOY_HOST }}
           username: ${{ secrets.API_DEPLOY_USER }}
           key: ${{ secrets.API_DEPLOY_SSH_KEY }}
-          script: mkdir -p /opt/timon-platform/api/releases/${{ github.sha }}
+          script: mkdir -p /opt/timon-platform/api/releases/${{ github.sha }}/config
 
       - name: Upload API release
         uses: appleboy/scp-action@v1.0.0
@@ -115,6 +134,16 @@ jobs:
           key: ${{ secrets.API_DEPLOY_SSH_KEY }}
           source: release/*
           target: /opt/timon-platform/api/releases/${{ github.sha }}
+          strip_components: 1
+
+      - name: Upload API configuration
+        uses: appleboy/scp-action@v1.0.0
+        with:
+          host: ${{ secrets.API_DEPLOY_HOST }}
+          username: ${{ secrets.API_DEPLOY_USER }}
+          key: ${{ secrets.API_DEPLOY_SSH_KEY }}
+          source: release-config/*
+          target: /opt/timon-platform/api/releases/${{ github.sha }}/config
           strip_components: 1
 
       - name: Activate API release
@@ -137,6 +166,8 @@ jobs:
             }
             trap rollback ERR
             chmod 0755 "$release/sim-api" "$release/sim-migrate"
+            chmod 0600 "$release/config/api.env" "$release/config/postgres.env"
+            sudo /usr/local/sbin/timon-sim-prepare-runtime "$release"
             ln -sfn "$release" "$current"
             sudo systemctl start timon-sim-migrate
             sudo systemctl restart timon-sim-api
