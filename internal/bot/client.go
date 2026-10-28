@@ -50,7 +50,7 @@ func NewHTTPClient(baseURL string, tokens ...string) *HTTPClient {
 	return &HTTPClient{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
-		client:  &http.Client{Timeout: 10 * time.Second},
+		client:  &http.Client{Timeout: 30 * time.Second},
 	}
 }
 

@@ -177,6 +177,11 @@ snapshots the actual rate and source version.
 Sandbox catalogue mode remains paired with mock payment and mock fulfillment;
 it never calls Keepgo line-creation endpoints.
 
+`sim-api` warms the Keepgo catalogue before it starts listening. Once populated,
+an expired catalogue is served as stale data while a bounded background refresh
+runs, so ordinary Telegram requests do not inherit provider latency or a temporary
+provider outage.
+
 ## Deferred gates
 
 The following require separate owner decisions: production provider credentials and purchases, real payment shop/gateway, webhook inbox, refunds, encryption/key management, provider failover and any public production launch.

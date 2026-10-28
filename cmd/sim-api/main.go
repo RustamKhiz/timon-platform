@@ -89,6 +89,15 @@ func main() {
 		os.Exit(2)
 	}
 	service := sim.NewServiceWithCatalog(pricing, repository, catalog)
+	if catalog != nil {
+		warmupCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		_, err := service.Packages(warmupCtx, "TR")
+		cancel()
+		if err != nil {
+			logger.Error("could not warm Keepgo sandbox catalogue", "error", err)
+			os.Exit(1)
+		}
+	}
 	server := &http.Server{
 		Addr:              address,
 		Handler:           httpapi.New(service, logger, httpapi.Config{BotToken: apiToken, StorageMode: storageMode, ProviderMode: providerMode}),

@@ -25,14 +25,15 @@ var countryNames = map[string]string{
 }
 
 type Catalog struct {
-	client  *Client
-	fx      FXRateProvider
-	ttl     time.Duration
-	now     func() time.Time
-	mu      sync.Mutex
-	loaded  time.Time
-	version string
-	items   map[string]sim.Package
+	client     *Client
+	fx         FXRateProvider
+	ttl        time.Duration
+	now        func() time.Time
+	mu         sync.Mutex
+	loaded     time.Time
+	version    string
+	items      map[string]sim.Package
+	refreshing bool
 }
 
 type FXRateProvider interface {
@@ -106,11 +107,34 @@ func (c *Catalog) Package(ctx context.Context, packageID string) (sim.Package, e
 
 func (c *Catalog) refresh(ctx context.Context, force bool) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	now := c.now().UTC()
 	if !force && len(c.items) > 0 && now.Sub(c.loaded) < c.ttl {
+		c.mu.Unlock()
 		return nil
 	}
+	if !force && len(c.items) > 0 {
+		if !c.refreshing {
+			c.refreshing = true
+			go c.refreshInBackground()
+		}
+		c.mu.Unlock()
+		return nil
+	}
+	c.mu.Unlock()
+	return c.load(ctx)
+}
+
+func (c *Catalog) refreshInBackground() {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_ = c.load(ctx)
+	c.mu.Lock()
+	c.refreshing = false
+	c.mu.Unlock()
+}
+
+func (c *Catalog) load(ctx context.Context) error {
+	now := c.now().UTC()
 	response, err := c.client.Bundles(ctx, true)
 	if err != nil {
 		return err
@@ -124,9 +148,11 @@ func (c *Catalog) refresh(ctx context.Context, force bool) error {
 	if len(items) == 0 {
 		return fmt.Errorf("Keepgo catalogue contains no supported country packages")
 	}
+	c.mu.Lock()
 	c.items = items
 	c.loaded = now
 	c.version = version
+	c.mu.Unlock()
 	return nil
 }
 
