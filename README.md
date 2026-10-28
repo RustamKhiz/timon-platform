@@ -19,8 +19,11 @@ SIM Telegram bot
 Mock mode exposes a small provider-shaped package list. In `keepgo-sandbox` mode
 the API reads country eSIM packages from Keepgo, removes duplicate offers with
 the same data/validity combination, and keeps the cheapest wholesale option.
-Packages longer than 30 days, pSIM products and sub-1-GB packages are excluded
-from the first TIMON SIM catalogue. Unlimited offers are labelled separately.
+The first TIMON SIM catalogue exposes only the curated 5, 10 and 20 GB travel
+packages valid for 30 days. Short low-volume offers, unusually expensive short
+plans, Lifetime packages, pSIM products and Unlimited offers remain hidden.
+Composite 40/60 GB products are deferred until the refill workflow has durable
+step-level idempotency and manual recovery for partial provider failures.
 
 Mock wholesale rates are synthetic development fixtures, not a commercial price list. Retail price uses the approved formula:
 

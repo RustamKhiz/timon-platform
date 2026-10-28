@@ -172,7 +172,7 @@ func normalizePackages(bundles []Bundle, fxRate float64, version string) map[str
 				continue
 			}
 			unlimited := strings.HasPrefix(strings.ToLower(refill.Title), "unlimited")
-			if !unlimited && refill.AmountMB < 1024 {
+			if unlimited || !isMVPPackage(refill.AmountMB, *refill.AmountDays) {
 				continue
 			}
 			priceCents := int(math.Round(refill.PriceUSD * 100))
@@ -198,6 +198,18 @@ func normalizePackages(bundles []Bundle, fxRate float64, version string) map[str
 		}
 	}
 	return result
+}
+
+func isMVPPackage(amountMB, days int) bool {
+	if days != 30 {
+		return false
+	}
+	switch amountMB {
+	case 5 * 1024, 10 * 1024, 20 * 1024:
+		return true
+	default:
+		return false
+	}
 }
 
 func codeForCountry(name string) string {
