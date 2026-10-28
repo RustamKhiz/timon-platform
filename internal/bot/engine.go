@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/RustamKhiz/timon-platform/internal/sim"
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 type Button struct {
@@ -18,6 +19,8 @@ type Button struct {
 type Response struct {
 	Text             string
 	Buttons          [][]Button
+	Photo            []byte
+	PhotoFilename    string
 	DeliveredOrderID string
 }
 
@@ -58,6 +61,8 @@ func (e *Engine) Handle(ctx context.Context, userID int64, input string) (Respon
 		return e.createOrder(ctx, userID, strings.TrimPrefix(input, "order:"))
 	case strings.HasPrefix(input, "pay:"):
 		return e.mockPay(ctx, userID, strings.TrimPrefix(input, "pay:"))
+	case strings.HasPrefix(input, "esim:"):
+		return e.esimDetails(ctx, userID, strings.TrimPrefix(input, "esim:"))
 	default:
 		return mainMenu(), nil
 	}
@@ -182,12 +187,34 @@ func (e *Engine) mockPay(ctx context.Context, userID int64, orderID string) (Res
 	if err != nil {
 		return Response{}, err
 	}
+	return activationResponse(order)
+}
+
+func (e *Engine) esimDetails(ctx context.Context, userID int64, orderID string) (Response, error) {
+	order, err := e.client.Order(ctx, orderID, userID)
+	if err != nil {
+		return Response{}, err
+	}
+	return activationResponse(order)
+}
+
+func activationResponse(order sim.Order) (Response, error) {
 	activation := order.Activation
 	if activation == nil || !activation.IsMock {
-		return Response{}, errorsNew("mock provider did not return activation data")
+		return Response{}, errorsNew("тестовая eSIM ещё не готова")
 	}
-	text := fmt.Sprintf("ТЕСТ / MOCK\n\nТестовая eSIM готова. Это нерабочие mock-данные.\n\nSM-DP+: %s\nКод: %s\nManual: %s", activation.SMAddress, activation.ActivationCode, activation.ManualCode)
-	return Response{Text: text, Buttons: [][]Button{{{Text: "Мои eSIM", Data: "my"}}, {{Text: "В меню", Data: "menu"}}}, DeliveredOrderID: order.ID}, nil
+	png, err := qrcode.Encode(activation.ManualCode, qrcode.Medium, 512)
+	if err != nil {
+		return Response{}, fmt.Errorf("generate mock activation QR: %w", err)
+	}
+	text := fmt.Sprintf("ТЕСТ / MOCK\n\nТестовая eSIM готова. QR и данные ниже не работают в реальной сети.\n\nУстановка:\n• iPhone: Настройки → Сотовая связь → Добавить eSIM → Использовать QR-код.\n• Android: Настройки → Сеть и интернет / SIM → Добавить eSIM → Сканировать QR-код.\n\nРучная установка:\nSM-DP+: %s\nКод: %s\nLPA: %s", activation.SMAddress, activation.ActivationCode, activation.ManualCode)
+	return Response{
+		Text:             text,
+		Buttons:          [][]Button{{{Text: "Мои eSIM", Data: "my"}}, {{Text: "В меню", Data: "menu"}}},
+		Photo:            png,
+		PhotoFilename:    "timon-sim-mock-qr.png",
+		DeliveredOrderID: order.ID,
+	}, nil
 }
 
 func (e *Engine) myESIMs(ctx context.Context, userID int64) (Response, error) {
@@ -200,10 +227,15 @@ func (e *Engine) myESIMs(ctx context.Context, userID int64) (Response, error) {
 	}
 	var text strings.Builder
 	text.WriteString("ТЕСТ / MOCK\n\nВаши тестовые eSIM:\n")
-	for _, order := range orders {
+	buttons := make([][]Button, 0, len(orders)+1)
+	for index, order := range orders {
 		fmt.Fprintf(&text, "\n%s — %s, %d дней, %d ГБ/день — %s", order.ID, order.Quote.Selection.CountryCode, order.Quote.Selection.DurationDays, order.Quote.Selection.GigabytesPerDay, order.OrderStatus)
+		if order.Activation != nil && order.Activation.IsMock {
+			buttons = append(buttons, []Button{{Text: fmt.Sprintf("Показать eSIM #%d", index+1), Data: "esim:" + order.ID}})
+		}
 	}
-	return Response{Text: text.String(), Buttons: [][]Button{{{Text: "В меню", Data: "menu"}}}}, nil
+	buttons = append(buttons, []Button{{Text: "В меню", Data: "menu"}})
+	return Response{Text: text.String(), Buttons: buttons}, nil
 }
 
 func normalizeInput(input string) string {

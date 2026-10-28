@@ -1,8 +1,10 @@
 package bot
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -12,6 +14,41 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
+}
+
+func TestTelegramSendPhotoUsesMultipartWithoutExposingToken(t *testing.T) {
+	const token = "secret-photo-token"
+	var gotContentType string
+	var gotBody []byte
+	telegram := &Telegram{
+		token: token,
+		http: &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if !strings.HasSuffix(request.URL.Path, "/sendPhoto") {
+				t.Fatalf("request path = %q", request.URL.Path)
+			}
+			gotContentType = request.Header.Get("Content-Type")
+			gotBody, _ = io.ReadAll(request.Body)
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(bytes.NewReader(nil))}, nil
+		})},
+	}
+
+	err := telegram.send(context.Background(), 42, Response{
+		Text:          "ТЕСТ / MOCK QR",
+		Photo:         []byte("fake-png"),
+		PhotoFilename: "qr.png",
+		Buttons:       [][]Button{{{Text: "В меню", Data: "menu"}}},
+	})
+	if err != nil {
+		t.Fatalf("send photo error = %v", err)
+	}
+	if !strings.HasPrefix(gotContentType, "multipart/form-data; boundary=") {
+		t.Fatalf("Content-Type = %q", gotContentType)
+	}
+	for _, fragment := range []string{"ТЕСТ / MOCK QR", "fake-png", "qr.png", "reply_markup"} {
+		if !bytes.Contains(gotBody, []byte(fragment)) {
+			t.Fatalf("multipart body does not contain %q", fragment)
+		}
+	}
 }
 
 func TestTelegramCallDoesNotExposeTokenInNetworkError(t *testing.T) {

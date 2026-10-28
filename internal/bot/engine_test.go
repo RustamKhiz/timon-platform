@@ -1,7 +1,9 @@
 package bot
 
 import (
+	"bytes"
 	"context"
+	"image/png"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 
 type fakeClient struct {
 	selection sim.Selection
+	orders    []sim.Order
 }
 
 func TestEngineSupportsTelegramCommandsAndMockLabel(t *testing.T) {
@@ -66,10 +69,22 @@ func (f *fakeClient) CreateOrder(context.Context, string, int64, string) (sim.Or
 	return sim.Order{ID: "o_1"}, nil
 }
 func (f *fakeClient) MockPay(context.Context, string, int64) (sim.Order, error) {
-	return sim.Order{ID: "o_1", Activation: &sim.ActivationData{SMAddress: "mock.invalid", ActivationCode: "MOCK", ManualCode: "MOCK", IsMock: true}}, nil
+	return readyOrder(), nil
 }
 func (f *fakeClient) MarkDelivered(context.Context, string, int64) error { return nil }
-func (f *fakeClient) Orders(context.Context, int64) ([]sim.Order, error) { return nil, nil }
+func (f *fakeClient) Orders(context.Context, int64) ([]sim.Order, error) { return f.orders, nil }
+func (f *fakeClient) Order(context.Context, string, int64) (sim.Order, error) {
+	return readyOrder(), nil
+}
+
+func readyOrder() sim.Order {
+	return sim.Order{
+		ID:          "o_1",
+		OrderStatus: "completed",
+		Quote:       sim.Quote{Selection: sim.Selection{CountryCode: "TR", DurationDays: 7, GigabytesPerDay: 2}},
+		Activation:  &sim.ActivationData{SMAddress: "mock.invalid", ActivationCode: "MOCK", ManualCode: "LPA:1$mock.invalid$MOCK", IsMock: true},
+	}
+}
 
 func TestEngineCountryDaysAndGBFlow(t *testing.T) {
 	client := &fakeClient{}
@@ -91,5 +106,40 @@ func TestEngineCountryDaysAndGBFlow(t *testing.T) {
 	response, err = engine.Handle(ctx, 42, "gb:5")
 	if err != nil || client.selection != (sim.Selection{CountryCode: "TR", DurationDays: 30, GigabytesPerDay: 5}) {
 		t.Fatalf("selection = %+v, response = %+v, err = %v", client.selection, response, err)
+	}
+}
+
+func TestEngineReturnsQRCodeAndInstallationInstructions(t *testing.T) {
+	engine := NewEngine(&fakeClient{})
+	response, err := engine.Handle(context.Background(), 42, "pay:o_1")
+	if err != nil {
+		t.Fatalf("pay response error = %v", err)
+	}
+	if _, err := png.Decode(bytes.NewReader(response.Photo)); err != nil {
+		t.Fatalf("response photo is not PNG: %v", err)
+	}
+	for _, fragment := range []string{"iPhone", "Android", "SM-DP+", "LPA:1$mock.invalid$MOCK"} {
+		if !strings.Contains(response.Text, fragment) {
+			t.Fatalf("response text does not contain %q: %q", fragment, response.Text)
+		}
+	}
+	if response.DeliveredOrderID != "o_1" {
+		t.Fatalf("delivered order ID = %q", response.DeliveredOrderID)
+	}
+}
+
+func TestMyESIMsAllowsRepeatedActivationDisplay(t *testing.T) {
+	client := &fakeClient{orders: []sim.Order{readyOrder()}}
+	engine := NewEngine(client)
+	response, err := engine.Handle(context.Background(), 42, "my")
+	if err != nil {
+		t.Fatalf("my response error = %v", err)
+	}
+	if len(response.Buttons) < 1 || response.Buttons[0][0].Data != "esim:o_1" {
+		t.Fatalf("my response buttons = %+v", response.Buttons)
+	}
+	repeated, err := engine.Handle(context.Background(), 42, "esim:o_1")
+	if err != nil || len(repeated.Photo) == 0 {
+		t.Fatalf("repeat response = %+v, error = %v", repeated, err)
 	}
 }

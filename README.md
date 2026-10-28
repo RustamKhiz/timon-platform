@@ -13,7 +13,8 @@ SIM Telegram bot
   -> idempotent order
   -> explicit mock payment
   -> synthetic mock eSIM activation data
-  -> My eSIMs
+  -> mock QR and iPhone/Android installation instructions
+  -> My eSIMs and repeated activation display
 ```
 
 The same temporary selection matrix is available for every country. A later provider adapter may replace it with provider-specific packages without changing the bot's ownership of navigation or the order's pricing snapshots.
@@ -54,7 +55,7 @@ $env:SIM_API_TOKEN = '<same local bot-to-API credential>'
 go run ./cmd/sim-bot
 ```
 
-The closed test bot refuses to start without `TELEGRAM_ALLOWED_USER_IDS`; several IDs may be separated by commas. Keep IDs in local/server configuration and do not commit them. The bot supports `/start`, `/buy`, `/my` and `/support`, uses Telegram long polling and inline buttons, and marks every screen as `ТЕСТ / MOCK`. Sending the activation message is followed by a separate delivery acknowledgement to `sim-api`. A failed Telegram send therefore does not falsely mark the order completed.
+The closed test bot refuses to start without `TELEGRAM_ALLOWED_USER_IDS`; several IDs may be separated by commas. Keep IDs in local/server configuration and do not commit them. The bot supports `/start`, `/buy`, `/my` and `/support`, uses Telegram long polling and inline buttons, and marks every screen as `ТЕСТ / MOCK`. Mock activation data is encoded into a PNG QR and can be shown again from `Мои eSIM`; it remains synthetic and cannot activate a real profile. Sending the activation photo is followed by a separate delivery acknowledgement to `sim-api`. A failed Telegram send therefore does not falsely mark the order completed.
 
 For a persistent bot runtime, set `TELEGRAM_OFFSET_FILE` to a writable state path. The bot atomically checkpoints the next Telegram `update_id`, preventing already processed updates from being replayed after an ordinary restart.
 

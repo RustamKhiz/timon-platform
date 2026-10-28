@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strconv"
 	"strings"
 	"time"
@@ -151,11 +153,73 @@ func (t *Telegram) send(ctx context.Context, chatID int64, response Response) er
 		}
 		keyboard = append(keyboard, telegramRow)
 	}
-	payload := map[string]any{"chat_id": chatID, "text": response.Text}
+	replyMarkup := map[string]any{}
 	if len(keyboard) > 0 {
-		payload["reply_markup"] = map[string]any{"inline_keyboard": keyboard}
+		replyMarkup = map[string]any{"inline_keyboard": keyboard}
+	}
+	if len(response.Photo) > 0 {
+		return t.sendPhoto(ctx, chatID, response, replyMarkup)
+	}
+	payload := map[string]any{"chat_id": chatID, "text": response.Text}
+	if len(replyMarkup) > 0 {
+		payload["reply_markup"] = replyMarkup
 	}
 	return t.call(ctx, "sendMessage", payload, nil)
+}
+
+func (t *Telegram) sendPhoto(ctx context.Context, chatID int64, response Response, replyMarkup map[string]any) error {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
+		return err
+	}
+	if err := writer.WriteField("caption", response.Text); err != nil {
+		return err
+	}
+	if len(replyMarkup) > 0 {
+		data, err := json.Marshal(replyMarkup)
+		if err != nil {
+			return err
+		}
+		if err := writer.WriteField("reply_markup", string(data)); err != nil {
+			return err
+		}
+	}
+	filename := response.PhotoFilename
+	if filename == "" {
+		filename = "qr.png"
+	}
+	header := make(textproto.MIMEHeader)
+	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="photo"; filename=%q`, filename))
+	header.Set("Content-Type", "image/png")
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return err
+	}
+	if _, err := part.Write(response.Photo); err != nil {
+		return err
+	}
+	if err := writer.Close(); err != nil {
+		return err
+	}
+
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.telegram.org/bot"+t.token+"/sendPhoto", &body)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", writer.FormDataContentType())
+	telegramResponse, err := t.http.Do(request)
+	if err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		return fmt.Errorf("Telegram API sendPhoto request failed")
+	}
+	defer telegramResponse.Body.Close()
+	if telegramResponse.StatusCode < 200 || telegramResponse.StatusCode >= 300 {
+		return fmt.Errorf("Telegram API sendPhoto returned %s", telegramResponse.Status)
+	}
+	return nil
 }
 
 func (t *Telegram) getUpdates(ctx context.Context, offset int64) ([]telegramUpdate, error) {

@@ -21,6 +21,7 @@ type SIMClient interface {
 	MockPay(context.Context, string, int64) (sim.Order, error)
 	MarkDelivered(context.Context, string, int64) error
 	Orders(context.Context, int64) ([]sim.Order, error)
+	Order(context.Context, string, int64) (sim.Order, error)
 }
 
 type HTTPClient struct {
@@ -85,6 +86,13 @@ func (c *HTTPClient) Orders(ctx context.Context, userID int64) ([]sim.Order, err
 		return nil, err
 	}
 	return response.Orders, nil
+}
+
+func (c *HTTPClient) Order(ctx context.Context, orderID string, userID int64) (sim.Order, error) {
+	var order sim.Order
+	path := "/api/v1/sim/orders/" + url.PathEscape(orderID) + "?telegram_user_id=" + strconv.FormatInt(userID, 10)
+	err := c.do(ctx, http.MethodGet, path, nil, "", &order)
+	return order, err
 }
 
 func (c *HTTPClient) do(ctx context.Context, method, path string, body any, idempotencyKey string, target any) error {
