@@ -1,14 +1,13 @@
 # TIMON Platform
 
-Independent Go repository for new TIMON products. The current code is a **mock-only TIMON SIM vertical slice** with an in-memory default and an optional PostgreSQL repository. It does not use VPN services, a real payment gateway, a real eSIM provider, production credentials, or deployment configuration.
+Independent Go repository for new TIMON products. The current code is a TIMON SIM test vertical slice with an in-memory default and an optional PostgreSQL repository. It can read package names and wholesale prices from the Keepgo sandbox, but payments and eSIM fulfillment remain mock. It does not use VPN services, a real payment gateway, production provider credentials, or production provider purchases.
 
 ## Implemented flow
 
 ```text
 SIM Telegram bot
   -> country: Turkey / Egypt / UAE / India / Thailand / Vietnam / China
-  -> duration: 1..30 days
-  -> allowance: 1..5 GB per day
+  -> provider-native package: total data + validity period
   -> 15-minute RUB quote
   -> idempotent order
   -> explicit mock payment
@@ -17,15 +16,27 @@ SIM Telegram bot
   -> My eSIMs and repeated activation display
 ```
 
-The same temporary selection matrix is available for every country. A later provider adapter may replace it with provider-specific packages without changing the bot's ownership of navigation or the order's pricing snapshots.
+Mock mode exposes a small provider-shaped package list. In `keepgo-sandbox` mode
+the API reads country eSIM packages from Keepgo, removes duplicate offers with
+the same data/validity combination, and keeps the cheapest wholesale option.
+Packages longer than 30 days, pSIM products and sub-1-GB packages are excluded
+from the first TIMON SIM catalogue. Unlimited offers are labelled separately.
 
 Mock wholesale rates are synthetic development fixtures, not a commercial price list. Retail price uses the approved formula:
 
 ```text
-retail_rub = mock_provider_cost_rub + fixed_markup_rub
+provider_cost_rub = ceil(provider_price_usd * configured_fx_rate)
+retail_rub = max(
+  provider_cost_rub + fixed_markup_rub,
+  price required to retain the minimum margin after the expected payment fee
+)
 ```
 
-The default markup is 100 RUB and can be changed only for new quotes with `SIM_FIXED_MARKUP_RUB`. Expected mock fees are zero, so the configured minimum remaining margin of 50 RUB is satisfied.
+The default fixed markup is 100 RUB. `SIM_EXPECTED_PAYMENT_FEE_BPS` defaults to
+350 basis points as a planning assumption until the separate payment shop has
+contractual fees. Expensive packages receive a larger applied markup when needed
+to retain at least 50 RUB before taxes and support. Quotes and orders snapshot
+the provider bundle, USD price, FX rate, configured/applied markup and expected fee.
 
 ## Run locally
 
@@ -55,7 +66,13 @@ $env:SIM_API_TOKEN = '<same local bot-to-API credential>'
 go run ./cmd/sim-bot
 ```
 
-The closed test bot refuses to start without `TELEGRAM_ALLOWED_USER_IDS`; several IDs may be separated by commas. Keep IDs in local/server configuration and do not commit them. The bot supports `/start`, `/buy`, `/my` and `/support`, uses Telegram long polling and inline buttons, and marks every screen as `ТЕСТ / MOCK`. Mock activation data is encoded into a PNG QR and can be shown again from `Мои eSIM`; it remains synthetic and cannot activate a real profile. Sending the activation photo is followed by a separate delivery acknowledgement to `sim-api`. A failed Telegram send therefore does not falsely mark the order completed.
+The closed test bot refuses to start without `TELEGRAM_ALLOWED_USER_IDS`; several IDs may be separated by commas. Keep IDs in local/server configuration and do not commit them. The bot supports `/start`, `/buy`, `/my` and `/support`, uses Telegram long polling and inline buttons, and marks the purchase flow as sandbox/test. Mock activation data is encoded into a PNG QR and can be shown again from `Мои eSIM`; it remains synthetic and cannot activate a real profile. Sending the activation photo is followed by a separate delivery acknowledgement to `sim-api`. A failed Telegram send therefore does not falsely mark the order completed.
+
+The deployed sandbox stage currently reads the real Keepgo Sandbox catalogue but does
+not call `/line/create`. Keepgo Sandbox can return a test ICCID and LPA code with the
+production-shaped response, but it does not issue a real installable eSIM. Provider
+line creation will be enabled only after the order state machine prevents duplicate
+external purchases and preserves ambiguous outcomes for manual review.
 
 For a persistent bot runtime, set `TELEGRAM_OFFSET_FILE` to a writable state path. The bot atomically checkpoints the next Telegram `update_id`, preventing already processed updates from being replayed after an ordinary restart.
 
@@ -63,6 +80,7 @@ For a persistent bot runtime, set `TELEGRAM_OFFSET_FILE` to a writable state pat
 
 - `GET /healthz`
 - `GET /api/v1/sim/countries`
+- `GET /api/v1/sim/packages?country_code=TR`
 - `POST /api/v1/sim/quotes`
 - `POST /api/v1/sim/orders` with `Idempotency-Key`
 - `GET /api/v1/sim/orders?telegram_user_id=...`
@@ -75,8 +93,7 @@ Example quote body:
 ```json
 {
   "country_code": "TR",
-  "duration_days": 10,
-  "gigabytes_per_day": 2
+  "package_id": "keepgo:29:data:20480:30"
 }
 ```
 
@@ -112,8 +129,54 @@ go test ./internal/postgres -run TestPostgresRestartAndIdempotency
 
 The check was completed successfully on 2026-10-22 against the dedicated local PostgreSQL 18 database `timon_sim_test`. Its credentials remain local and are not committed.
 
+## Keepgo sandbox catalogue
+
+The standalone sandbox catalogue probe performs read-only requests for the
+account balance and bundles. The same read-only client can supply packages to
+`sim-api` when `SIM_PROVIDER_MODE=keepgo-sandbox`; neither path buys a line or
+deploys provider credentials.
+
+Required process environment variables:
+
+```text
+KEEPGO_BASE_URL=https://myaccount.sandbox.keepgo.com/api/v2
+KEEPGO_API_KEY=<sandbox API key>
+KEEPGO_ACCESS_TOKEN=<sandbox access token>
+```
+
+Run the probe from this repository:
+
+```powershell
+.\scripts\keepgo-sandbox-catalog.ps1
+```
+
+The JSON report contains the test balance and wholesale `price_usd` refills for
+bundles covering Turkey, Egypt, the UAE, India, Thailand, Vietnam, and China.
+Credentials are sent only in the `apiKey` and `accessToken` headers and are never
+printed or saved by the helper. The report is written to the ignored local file
+`.local/keepgo-sandbox-catalog.json`. Keepgo production credentials must not be
+used while the integration remains sandbox-only.
+
+To run `sim-api` against the read-only Keepgo sandbox catalogue, supply sandbox
+credentials only in the process environment:
+
+```powershell
+$env:SIM_PROVIDER_MODE = 'keepgo-sandbox'
+$env:SIM_USD_RUB_RATE = '84.5572'
+$env:KEEPGO_API_KEY = '<sandbox API key>'
+$env:KEEPGO_ACCESS_TOKEN = '<sandbox access token>'
+go run ./cmd/sim-api
+```
+
+The API normally loads the latest published USD/RUB rate from the official CBR
+XML endpoint, applies `SIM_FX_BUFFER_BPS` (500 by default), and caches it for six
+hours. `SIM_USD_RUB_RATE` is only an optional outage fallback and does not need
+daily manual updates. Every quote snapshots the actual rate and source version.
+Sandbox catalogue mode remains paired with mock payment and mock fulfillment;
+it never calls Keepgo line-creation endpoints.
+
 ## Deferred gates
 
-The following require separate owner decisions: real provider adapter and credentials, real prices, payment shop/gateway, webhook inbox, refunds, encryption/key management and any public production launch.
+The following require separate owner decisions: production provider credentials and purchases, real payment shop/gateway, webhook inbox, refunds, encryption/key management, provider failover and any public production launch.
 
 The owner approved a closed mock staging deployment and CI/CD on 2026-10-26. Its files and safeguards are documented in [DEPLOYMENT.md](DEPLOYMENT.md). This approval does not extend to public access, real provider purchases, payments or VPN changes.

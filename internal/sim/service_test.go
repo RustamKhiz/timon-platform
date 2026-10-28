@@ -7,6 +7,20 @@ import (
 	"time"
 )
 
+type fakeCatalog struct {
+	packages []Package
+}
+
+func (f fakeCatalog) Packages(context.Context, string) ([]Package, error) { return f.packages, nil }
+func (f fakeCatalog) Package(_ context.Context, id string) (Package, error) {
+	for _, pkg := range f.packages {
+		if pkg.ID == id {
+			return pkg, nil
+		}
+	}
+	return Package{}, ErrNotFound
+}
+
 func TestCreateQuoteUsesApprovedRangesAndPricingSnapshot(t *testing.T) {
 	service := NewService(PricingConfig{FixedMarkupRUB: 100, MinimumMargin: 50, QuoteTTL: 15 * time.Minute})
 	ctx := context.Background()
@@ -99,5 +113,24 @@ func TestExpiredQuoteCannotBecomeOrder(t *testing.T) {
 	service.now = func() time.Time { return quote.ExpiresAt }
 	if _, err := service.CreateOrder(ctx, quote.ID, 123, "expired"); !errors.Is(err, ErrQuoteExpired) {
 		t.Fatalf("CreateOrder() error = %v, want ErrQuoteExpired", err)
+	}
+}
+
+func TestProviderPackagePricingRaisesMarkupToProtectMinimumMargin(t *testing.T) {
+	pkg := Package{ID: "keepgo:228:data:20480:30", CountryCode: "IN", Name: "20 GB / 30 days", DataMB: 20480, ValidityDays: 30, ProviderID: "keepgo-sandbox", ProviderBundleID: 228, ProviderPriceUSDCents: 3259, FXRateRUBPerUSD: 84.5572, ProviderRateVersion: "snapshot"}
+	service := NewServiceWithCatalog(PricingConfig{FixedMarkupRUB: 100, ExpectedFeeBPS: 350, MinimumMargin: 50}, nil, fakeCatalog{packages: []Package{pkg}})
+	packages, err := service.Packages(context.Background(), "IN")
+	if err != nil || len(packages) != 1 {
+		t.Fatalf("Packages() = %+v, %v", packages, err)
+	}
+	if packages[0].ProviderCostRUB != 2756 || packages[0].RetailRUB != 2908 || packages[0].AppliedMarkupRUB != 152 || packages[0].ExpectedFeeRUB != 102 {
+		t.Fatalf("unexpected protected price: %+v", packages[0])
+	}
+	quote, err := service.CreateQuote(context.Background(), Selection{CountryCode: "IN", PackageID: pkg.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if quote.Selection.PackageName != pkg.Name || quote.ProviderBundleID != 228 || quote.ProviderPriceUSDCents != 3259 || quote.RetailRUB != 2908 {
+		t.Fatalf("unexpected package quote snapshot: %+v", quote)
 	}
 }

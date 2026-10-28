@@ -25,7 +25,7 @@ func TestEngineSupportsTelegramCommandsAndMockLabel(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Handle(%q) error = %v", input, err)
 		}
-		if !strings.HasPrefix(response.Text, "ТЕСТ / MOCK") {
+		if !strings.HasPrefix(response.Text, "ТЕСТ /") {
 			t.Fatalf("Handle(%q) text = %q", input, response.Text)
 		}
 	}
@@ -61,6 +61,9 @@ func TestParseAllowedUserIDs(t *testing.T) {
 func (f *fakeClient) Countries(context.Context) ([]sim.Country, error) {
 	return []sim.Country{{Code: "TR", Name: "Турция"}}, nil
 }
+func (f *fakeClient) Packages(context.Context, string) ([]sim.Package, error) {
+	return []sim.Package{{ID: "keepgo:29:data:20480:30", CountryCode: "TR", Name: "20 GB / 30 days", RetailRUB: 916}}, nil
+}
 func (f *fakeClient) CreateQuote(_ context.Context, selection sim.Selection) (sim.Quote, error) {
 	f.selection = selection
 	return sim.Quote{ID: "q_1", Selection: selection, RetailRUB: 520, ExpiresAt: time.Now().Add(15 * time.Minute)}, nil
@@ -86,7 +89,7 @@ func readyOrder() sim.Order {
 	}
 }
 
-func TestEngineCountryDaysAndGBFlow(t *testing.T) {
+func TestEngineCountryPackageFlow(t *testing.T) {
 	client := &fakeClient{}
 	engine := NewEngine(client)
 	ctx := context.Background()
@@ -96,15 +99,11 @@ func TestEngineCountryDaysAndGBFlow(t *testing.T) {
 		t.Fatalf("country menu = %+v, err = %v", response, err)
 	}
 	response, err = engine.Handle(ctx, 42, "country:TR")
-	if err != nil || len(response.Buttons) != 6 {
-		t.Fatalf("days menu rows = %d, err = %v", len(response.Buttons), err)
+	if err != nil || len(response.Buttons) != 2 || response.Buttons[0][0].Data != "package:keepgo:29:data:20480:30" {
+		t.Fatalf("package menu = %+v, err = %v", response, err)
 	}
-	response, err = engine.Handle(ctx, 42, "days:30")
-	if err != nil || len(response.Buttons) != 5 {
-		t.Fatalf("GB menu rows = %d, err = %v", len(response.Buttons), err)
-	}
-	response, err = engine.Handle(ctx, 42, "gb:5")
-	if err != nil || client.selection != (sim.Selection{CountryCode: "TR", DurationDays: 30, GigabytesPerDay: 5}) {
+	response, err = engine.Handle(ctx, 42, "package:keepgo:29:data:20480:30")
+	if err != nil || client.selection != (sim.Selection{CountryCode: "TR", PackageID: "keepgo:29:data:20480:30"}) {
 		t.Fatalf("selection = %+v, response = %+v, err = %v", client.selection, response, err)
 	}
 }

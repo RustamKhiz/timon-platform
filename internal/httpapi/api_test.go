@@ -56,6 +56,34 @@ func TestMockVerticalSliceHTTP(t *testing.T) {
 	}
 }
 
+func TestPackageCatalogueAndPackageQuoteHTTP(t *testing.T) {
+	service := sim.NewService(sim.PricingConfig{FixedMarkupRUB: 100, ExpectedFeeBPS: 350, MinimumMargin: 50})
+	server := httptest.NewServer(New(service, slog.New(slog.NewTextHandler(io.Discard, nil))))
+	defer server.Close()
+	response, err := http.Get(server.URL + "/api/v1/sim/packages?country_code=TR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var packagesResponse struct {
+		Packages []sim.Package `json:"packages"`
+	}
+	decodeResponse(t, response, &packagesResponse)
+	if len(packagesResponse.Packages) == 0 {
+		t.Fatal("mock package catalogue is empty")
+	}
+	quoteResponse := postJSON(t, server.URL+"/api/v1/sim/quotes", map[string]any{
+		"country_code": "TR", "package_id": packagesResponse.Packages[0].ID,
+	}, "")
+	if quoteResponse.StatusCode != http.StatusCreated {
+		t.Fatalf("package quote status = %d", quoteResponse.StatusCode)
+	}
+	var quote sim.Quote
+	decodeResponse(t, quoteResponse, &quote)
+	if quote.Selection.PackageID == "" || quote.Selection.PackageName == "" || quote.AppliedMarkupRUB < 100 {
+		t.Fatalf("unexpected package quote: %+v", quote)
+	}
+}
+
 func TestBotAuthentication(t *testing.T) {
 	service := sim.NewService(sim.PricingConfig{FixedMarkupRUB: 100})
 	server := httptest.NewServer(New(service, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{BotToken: "test-secret", StorageMode: "memory"}))

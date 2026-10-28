@@ -20,8 +20,9 @@ type API struct {
 }
 
 type Config struct {
-	BotToken    string
-	StorageMode string
+	BotToken     string
+	StorageMode  string
+	ProviderMode string
 }
 
 func New(service *sim.Service, logger *slog.Logger, configs ...Config) http.Handler {
@@ -33,6 +34,7 @@ func New(service *sim.Service, logger *slog.Logger, configs ...Config) http.Hand
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", api.health)
 	mux.HandleFunc("GET /api/v1/sim/countries", api.countries)
+	mux.HandleFunc("GET /api/v1/sim/packages", api.packages)
 	mux.HandleFunc("POST /api/v1/sim/quotes", api.createQuote)
 	mux.HandleFunc("POST /api/v1/sim/orders", api.createOrder)
 	mux.HandleFunc("GET /api/v1/sim/orders", api.listOrders)
@@ -43,17 +45,27 @@ func New(service *sim.Service, logger *slog.Logger, configs ...Config) http.Hand
 }
 
 func (a *API) health(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": "mock", "storage": a.config.StorageMode})
+	providerMode := a.config.ProviderMode
+	if providerMode == "" {
+		providerMode = "mock"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": "mock-fulfillment", "provider": providerMode, "storage": a.config.StorageMode})
 }
 
 func (a *API) countries(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"countries":               a.service.Countries(),
-		"duration_days":           map[string]int{"min": 1, "max": 30},
-		"gigabytes_per_day":       map[string]int{"min": 1, "max": 5},
-		"catalog_is_mock":         true,
-		"provider_specific_later": true,
+		"countries":       a.service.Countries(),
+		"catalog_is_mock": !a.service.UsesProviderCatalog(),
 	})
+}
+
+func (a *API) packages(w http.ResponseWriter, r *http.Request) {
+	packages, err := a.service.Packages(r.Context(), r.URL.Query().Get("country_code"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"packages": packages})
 }
 
 func (a *API) createQuote(w http.ResponseWriter, r *http.Request) {

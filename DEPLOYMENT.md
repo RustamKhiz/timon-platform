@@ -1,6 +1,8 @@
 # TIMON SIM closed staging deployment
 
-This repository deploys an allowlisted mock-only staging environment. It does not enable real payments, real provider purchases or public access.
+This repository deploys an allowlisted sandbox staging environment. It reads packages
+and wholesale prices from Keepgo Sandbox while payment and fulfillment remain mock.
+It does not enable real payments, production provider purchases or public access.
 
 ## Runtime layout
 
@@ -25,6 +27,13 @@ Create a protected `staging` environment with these secrets:
 - `SIM_DATABASE_PASSWORD`
 - `SIM_TUNNEL_SSH_KEY`
 - `SIM_TUNNEL_KNOWN_HOSTS`
+- `KEEPGO_SANDBOX_API_KEY`
+- `KEEPGO_SANDBOX_ACCESS_TOKEN`
+
+Set the non-secret staging environment variable `SIM_USD_RUB_RATE` once as an
+optional outage fallback. Normal pricing loads the latest published CBR rate,
+adds the configured 5% buffer and caches it. Existing quote and order snapshots
+remain unchanged when the daily rate changes.
 
 The pipeline renders the API and PostgreSQL environment files on the ephemeral
 GitHub runner, uploads them together with the tracked PostgreSQL Compose file
@@ -45,6 +54,13 @@ SIM_API_ADDR=127.0.0.1:8182
 SIM_API_TOKEN=<random bot-to-api secret>
 SIM_DATABASE_URL=postgresql://timon_sim:<encoded password>@127.0.0.1:55432/timon_sim?sslmode=disable
 SIM_FIXED_MARKUP_RUB=100
+SIM_EXPECTED_PAYMENT_FEE_BPS=350
+SIM_PROVIDER_MODE=keepgo-sandbox
+SIM_FX_BUFFER_BPS=500
+SIM_USD_RUB_RATE=<approved buffered USD/RUB rate>
+KEEPGO_BASE_URL=https://myaccount.sandbox.keepgo.com/api/v2
+KEEPGO_API_KEY=<sandbox API key>
+KEEPGO_ACCESS_TOKEN=<sandbox access token>
 ```
 
 5. Install the two systemd units from `deploy/systemd`.
@@ -78,6 +94,8 @@ SIM_API_TOKEN=<same bot-to-api secret as the API>
 - The reverse tunnel listens only on NL `127.0.0.1:18082`, reconnects after either host restarts and keeps its private key isolated from the API process.
 - Bot `getMe` succeeds without logging the token or full URL.
 - `/start`, purchase flow and `My eSIMs` work for an allowlisted user after API and bot restarts.
+- Country packages and wholesale prices come from Keepgo Sandbox; the final activation
+  remains visibly synthetic until the durable sandbox line-creation workflow is enabled.
 - VPN API/site/bot and both Amnezia containers remain healthy.
 
 ## Rollback

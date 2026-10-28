@@ -16,12 +16,24 @@ import (
 
 type SIMClient interface {
 	Countries(context.Context) ([]sim.Country, error)
+	Packages(context.Context, string) ([]sim.Package, error)
 	CreateQuote(context.Context, sim.Selection) (sim.Quote, error)
 	CreateOrder(context.Context, string, int64, string) (sim.Order, error)
 	MockPay(context.Context, string, int64) (sim.Order, error)
 	MarkDelivered(context.Context, string, int64) error
 	Orders(context.Context, int64) ([]sim.Order, error)
 	Order(context.Context, string, int64) (sim.Order, error)
+}
+
+func (c *HTTPClient) Packages(ctx context.Context, countryCode string) ([]sim.Package, error) {
+	var response struct {
+		Packages []sim.Package `json:"packages"`
+	}
+	path := "/api/v1/sim/packages?country_code=" + url.QueryEscape(countryCode)
+	if err := c.do(ctx, http.MethodGet, path, nil, "", &response); err != nil {
+		return nil, err
+	}
+	return response.Packages, nil
 }
 
 type HTTPClient struct {

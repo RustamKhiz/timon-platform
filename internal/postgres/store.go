@@ -27,11 +27,15 @@ func (s *Store) SaveQuote(ctx context.Context, quote sim.Quote) error {
         INSERT INTO sim_quotes (
             id, provider_id, country_code, duration_days, gigabytes_per_day,
             provider_cost_rub, fixed_markup_rub, expected_fee_rub, retail_rub,
-            provider_rate_version, created_at, expires_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+            provider_rate_version, created_at, expires_at, package_id, package_name,
+            total_data_mb, provider_bundle_id, provider_price_usd_cents,
+            fx_rate_rub_per_usd, applied_markup_rub
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`,
 		quote.ID, quote.ProviderID, quote.Selection.CountryCode, quote.Selection.DurationDays,
 		quote.Selection.GigabytesPerDay, quote.ProviderCostRUB, quote.FixedMarkupRUB,
-		quote.ExpectedFeeRUB, quote.RetailRUB, quote.ProviderRateVersion, quote.CreatedAt, quote.ExpiresAt)
+		quote.ExpectedFeeRUB, quote.RetailRUB, quote.ProviderRateVersion, quote.CreatedAt, quote.ExpiresAt,
+		quote.Selection.PackageID, quote.Selection.PackageName, quote.Selection.TotalDataMB,
+		quote.ProviderBundleID, quote.ProviderPriceUSDCents, quote.FXRateRUBPerUSD, quote.AppliedMarkupRUB)
 	if err != nil {
 		return fmt.Errorf("save quote: %w", err)
 	}
@@ -66,11 +70,15 @@ func (s *Store) CreateOrder(ctx context.Context, quoteID string, telegramUserID 
 	err = tx.QueryRow(ctx, `
         SELECT id, provider_id, country_code, duration_days, gigabytes_per_day,
                provider_cost_rub, fixed_markup_rub, expected_fee_rub, retail_rub,
-               provider_rate_version, created_at, expires_at
+               provider_rate_version, created_at, expires_at, package_id, package_name,
+               total_data_mb, provider_bundle_id, provider_price_usd_cents,
+               fx_rate_rub_per_usd, applied_markup_rub
           FROM sim_quotes WHERE id = $1 FOR SHARE`, quoteID).Scan(
 		&quote.ID, &quote.ProviderID, &quote.Selection.CountryCode, &quote.Selection.DurationDays,
 		&quote.Selection.GigabytesPerDay, &quote.ProviderCostRUB, &quote.FixedMarkupRUB,
-		&quote.ExpectedFeeRUB, &quote.RetailRUB, &quote.ProviderRateVersion, &quote.CreatedAt, &quote.ExpiresAt)
+		&quote.ExpectedFeeRUB, &quote.RetailRUB, &quote.ProviderRateVersion, &quote.CreatedAt, &quote.ExpiresAt,
+		&quote.Selection.PackageID, &quote.Selection.PackageName, &quote.Selection.TotalDataMB,
+		&quote.ProviderBundleID, &quote.ProviderPriceUSDCents, &quote.FXRateRUBPerUSD, &quote.AppliedMarkupRUB)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return sim.Order{}, sim.ErrNotFound
 	}
@@ -91,13 +99,17 @@ func (s *Store) CreateOrder(ctx context.Context, quoteID string, telegramUserID 
             duration_days, gigabytes_per_day, provider_cost_rub, fixed_markup_rub,
             expected_fee_rub, retail_rub, provider_rate_version, quote_created_at,
             quote_expires_at, order_status, payment_status, fulfillment_status,
-            delivery_status, created_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)`,
+            delivery_status, created_at, package_id, package_name, total_data_mb,
+            provider_bundle_id, provider_price_usd_cents, fx_rate_rub_per_usd,
+            applied_markup_rub
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)`,
 		order.ID, order.TelegramUserID, idempotencyKey, quote.ID, quote.ProviderID,
 		quote.Selection.CountryCode, quote.Selection.DurationDays, quote.Selection.GigabytesPerDay,
 		quote.ProviderCostRUB, quote.FixedMarkupRUB, quote.ExpectedFeeRUB, quote.RetailRUB,
 		quote.ProviderRateVersion, quote.CreatedAt, quote.ExpiresAt, order.OrderStatus,
-		order.PaymentStatus, order.FulfillmentStatus, order.DeliveryStatus, order.CreatedAt)
+		order.PaymentStatus, order.FulfillmentStatus, order.DeliveryStatus, order.CreatedAt,
+		quote.Selection.PackageID, quote.Selection.PackageName, quote.Selection.TotalDataMB,
+		quote.ProviderBundleID, quote.ProviderPriceUSDCents, quote.FXRateRUBPerUSD, quote.AppliedMarkupRUB)
 	if err != nil {
 		return sim.Order{}, fmt.Errorf("insert order: %w", err)
 	}
@@ -232,7 +244,9 @@ const orderSelect = `
            o.order_status, o.payment_status, o.fulfillment_status,
            o.delivery_status, o.activation_sm_dp_address, o.activation_code,
            o.activation_manual_code, o.activation_is_mock, o.created_at,
-           o.paid_at, o.fulfillment_deadline_at
+           o.paid_at, o.fulfillment_deadline_at, o.package_id, o.package_name,
+           o.total_data_mb, o.provider_bundle_id, o.provider_price_usd_cents,
+           o.fx_rate_rub_per_usd, o.applied_markup_rub
       FROM sim_orders o`
 
 func queryOrder(ctx context.Context, db queryer, clause string, args ...any) (sim.Order, error) {
@@ -256,7 +270,11 @@ func scanOrder(row scanner) (sim.Order, error) {
 		&order.Quote.ProviderRateVersion, &order.Quote.CreatedAt, &order.Quote.ExpiresAt,
 		&order.OrderStatus, &order.PaymentStatus, &order.FulfillmentStatus,
 		&order.DeliveryStatus, &activationAddress, &activationCode, &activationManual,
-		&activationIsMock, &order.CreatedAt, &paidAt, &deadline)
+		&activationIsMock, &order.CreatedAt, &paidAt, &deadline,
+		&order.Quote.Selection.PackageID, &order.Quote.Selection.PackageName,
+		&order.Quote.Selection.TotalDataMB, &order.Quote.ProviderBundleID,
+		&order.Quote.ProviderPriceUSDCents, &order.Quote.FXRateRUBPerUSD,
+		&order.Quote.AppliedMarkupRUB)
 	if err != nil {
 		return sim.Order{}, fmt.Errorf("scan order: %w", err)
 	}

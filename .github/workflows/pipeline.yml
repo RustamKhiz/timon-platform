@@ -109,12 +109,17 @@ jobs:
           SIM_DATABASE_PASSWORD: ${{ secrets.SIM_DATABASE_PASSWORD }}
           SIM_TUNNEL_SSH_KEY: ${{ secrets.SIM_TUNNEL_SSH_KEY }}
           SIM_TUNNEL_KNOWN_HOSTS: ${{ secrets.SIM_TUNNEL_KNOWN_HOSTS }}
+          KEEPGO_API_KEY: ${{ secrets.KEEPGO_SANDBOX_API_KEY }}
+          KEEPGO_ACCESS_TOKEN: ${{ secrets.KEEPGO_SANDBOX_ACCESS_TOKEN }}
+          SIM_USD_RUB_RATE: ${{ vars.SIM_USD_RUB_RATE }}
         run: |
           set -eu
           test -n "$SIM_API_TOKEN"
           test -n "$SIM_DATABASE_PASSWORD"
           test -n "$SIM_TUNNEL_SSH_KEY"
           test -n "$SIM_TUNNEL_KNOWN_HOSTS"
+          test -n "$KEEPGO_API_KEY"
+          test -n "$KEEPGO_ACCESS_TOKEN"
           umask 077
           mkdir -p release-config
           cat >release-config/api.env <<EOF
@@ -122,6 +127,13 @@ jobs:
           SIM_API_TOKEN=$SIM_API_TOKEN
           SIM_DATABASE_URL=postgresql://timon_sim:$SIM_DATABASE_PASSWORD@127.0.0.1:55432/timon_sim?sslmode=disable
           SIM_FIXED_MARKUP_RUB=100
+          SIM_EXPECTED_PAYMENT_FEE_BPS=350
+          SIM_PROVIDER_MODE=keepgo-sandbox
+          SIM_FX_BUFFER_BPS=500
+          SIM_USD_RUB_RATE=$SIM_USD_RUB_RATE
+          KEEPGO_BASE_URL=https://myaccount.sandbox.keepgo.com/api/v2
+          KEEPGO_API_KEY=$KEEPGO_API_KEY
+          KEEPGO_ACCESS_TOKEN=$KEEPGO_ACCESS_TOKEN
           EOF
           printf 'POSTGRES_PASSWORD=%s\n' "$SIM_DATABASE_PASSWORD" >release-config/postgres.env
           cp deploy/postgres/compose.yaml release-config/compose.yaml

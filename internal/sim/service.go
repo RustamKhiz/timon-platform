@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -26,6 +27,7 @@ const mockProviderID = "mock-provider"
 type PricingConfig struct {
 	FixedMarkupRUB int
 	ExpectedFeeRUB int
+	ExpectedFeeBPS int
 	MinimumMargin  int
 	QuoteTTL       time.Duration
 }
@@ -54,6 +56,7 @@ type Service struct {
 	now     func() time.Time
 	pricing PricingConfig
 	store   Repository
+	catalog Catalog
 }
 
 func NewService(pricing PricingConfig) *Service {
@@ -65,6 +68,10 @@ func NewService(pricing PricingConfig) *Service {
 }
 
 func NewServiceWithRepository(pricing PricingConfig, repository Repository) *Service {
+	return NewServiceWithCatalog(pricing, repository, nil)
+}
+
+func NewServiceWithCatalog(pricing PricingConfig, repository Repository, catalog Catalog) *Service {
 	if pricing.FixedMarkupRUB <= 0 {
 		pricing.FixedMarkupRUB = 100
 	}
@@ -74,10 +81,18 @@ func NewServiceWithRepository(pricing PricingConfig, repository Repository) *Ser
 	if pricing.QuoteTTL <= 0 {
 		pricing.QuoteTTL = 15 * time.Minute
 	}
+	if repository == nil {
+		repository = &memoryStore{
+			quotes:         make(map[string]Quote),
+			orders:         make(map[string]Order),
+			idempotencyMap: make(map[string]string),
+		}
+	}
 	return &Service{
 		now:     time.Now,
 		pricing: pricing,
 		store:   repository,
+		catalog: catalog,
 	}
 }
 
@@ -93,7 +108,12 @@ func (s *Service) Countries() []Country {
 	}
 }
 
+func (s *Service) UsesProviderCatalog() bool { return s.catalog != nil }
+
 func (s *Service) CreateQuote(ctx context.Context, selection Selection) (Quote, error) {
+	if selection.PackageID != "" {
+		return s.createPackageQuote(ctx, selection)
+	}
 	if !s.validCountry(selection.CountryCode) || selection.DurationDays < 1 || selection.DurationDays > 30 || selection.GigabytesPerDay < 1 || selection.GigabytesPerDay > 5 {
 		return Quote{}, fmt.Errorf("%w: country must be supported, days 1..30, GB/day 1..5", ErrInvalidSelection)
 	}
@@ -109,6 +129,7 @@ func (s *Service) CreateQuote(ctx context.Context, selection Selection) (Quote, 
 		Selection:           selection,
 		ProviderCostRUB:     providerCost,
 		FixedMarkupRUB:      s.pricing.FixedMarkupRUB,
+		AppliedMarkupRUB:    s.pricing.FixedMarkupRUB,
 		ExpectedFeeRUB:      s.pricing.ExpectedFeeRUB,
 		RetailRUB:           providerCost + s.pricing.FixedMarkupRUB,
 		ProviderRateVersion: "mock-rates-v1",
@@ -119,6 +140,141 @@ func (s *Service) CreateQuote(ctx context.Context, selection Selection) (Quote, 
 		return Quote{}, err
 	}
 	return quote, nil
+}
+
+func (s *Service) Packages(ctx context.Context, countryCode string) ([]Package, error) {
+	if !s.validCountry(countryCode) {
+		return nil, fmt.Errorf("%w: unsupported country", ErrInvalidSelection)
+	}
+	if s.catalog == nil {
+		return mockPackages(countryCode, s.pricing), nil
+	}
+	packages, err := s.catalog.Packages(ctx, countryCode)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]Package, 0, len(packages))
+	for _, pkg := range packages {
+		priced, err := s.pricePackage(pkg)
+		if err == nil {
+			result = append(result, priced)
+		}
+	}
+	return result, nil
+}
+
+func (s *Service) createPackageQuote(ctx context.Context, selection Selection) (Quote, error) {
+	var pkg Package
+	var err error
+	if s.catalog == nil {
+		for _, candidate := range mockPackages(selection.CountryCode, s.pricing) {
+			if candidate.ID == selection.PackageID {
+				pkg = candidate
+				break
+			}
+		}
+		if pkg.ID == "" {
+			return Quote{}, ErrNotFound
+		}
+	} else {
+		pkg, err = s.catalog.Package(ctx, selection.PackageID)
+		if err != nil {
+			return Quote{}, err
+		}
+	}
+	if pkg.CountryCode != selection.CountryCode || !s.validCountry(pkg.CountryCode) {
+		return Quote{}, fmt.Errorf("%w: package does not match country", ErrInvalidSelection)
+	}
+	priced := pkg
+	if pkg.ProviderID != mockProviderID {
+		priced, err = s.pricePackage(pkg)
+		if err != nil {
+			return Quote{}, err
+		}
+	}
+	createdAt := s.now().UTC()
+	quote := Quote{
+		ID:         newID("q"),
+		ProviderID: priced.ProviderID,
+		Selection: Selection{
+			CountryCode:  priced.CountryCode,
+			DurationDays: priced.ValidityDays,
+			PackageID:    priced.ID,
+			PackageName:  priced.Name,
+			TotalDataMB:  priced.DataMB,
+		},
+		ProviderCostRUB:       priced.ProviderCostRUB,
+		FixedMarkupRUB:        priced.FixedMarkupRUB,
+		AppliedMarkupRUB:      priced.AppliedMarkupRUB,
+		ExpectedFeeRUB:        priced.ExpectedFeeRUB,
+		RetailRUB:             priced.RetailRUB,
+		ProviderRateVersion:   priced.ProviderRateVersion,
+		ProviderBundleID:      priced.ProviderBundleID,
+		ProviderPriceUSDCents: priced.ProviderPriceUSDCents,
+		FXRateRUBPerUSD:       priced.FXRateRUBPerUSD,
+		CreatedAt:             createdAt,
+		ExpiresAt:             createdAt.Add(s.pricing.QuoteTTL),
+	}
+	if err := s.store.SaveQuote(ctx, quote); err != nil {
+		return Quote{}, err
+	}
+	return quote, nil
+}
+
+func (s *Service) pricePackage(pkg Package) (Package, error) {
+	if pkg.ProviderPriceUSDCents <= 0 || pkg.FXRateRUBPerUSD <= 0 {
+		return Package{}, errors.New("provider package has no usable price or FX rate")
+	}
+	providerCost := int(math.Ceil(float64(pkg.ProviderPriceUSDCents) * pkg.FXRateRUBPerUSD / 100))
+	retail, expectedFee, err := calculateRetail(providerCost, s.pricing)
+	if err != nil {
+		return Package{}, err
+	}
+	pkg.ProviderCostRUB = providerCost
+	pkg.FixedMarkupRUB = s.pricing.FixedMarkupRUB
+	pkg.AppliedMarkupRUB = retail - providerCost
+	pkg.ExpectedFeeRUB = expectedFee
+	pkg.RetailRUB = retail
+	return pkg, nil
+}
+
+func mockPackages(countryCode string, pricing PricingConfig) []Package {
+	definitions := []struct {
+		name string
+		mb   int
+		days int
+	}{{"1 ГБ / 7 дней", 1024, 7}, {"3 ГБ / 15 дней", 3072, 15}, {"5 ГБ / 30 дней", 5120, 30}, {"10 ГБ / 30 дней", 10240, 30}, {"20 ГБ / 30 дней", 20480, 30}}
+	result := make([]Package, 0, len(definitions))
+	for _, definition := range definitions {
+		cost := mockDailyRate(countryCode) * definition.days
+		retail, expectedFee, err := calculateRetail(cost, pricing)
+		if err != nil {
+			continue
+		}
+		result = append(result, Package{ID: fmt.Sprintf("mock:%s:%d:%d", countryCode, definition.mb, definition.days), CountryCode: countryCode, Name: definition.name, DataMB: definition.mb, ValidityDays: definition.days, ProviderID: mockProviderID, ProviderCostRUB: cost, FixedMarkupRUB: pricing.FixedMarkupRUB, AppliedMarkupRUB: retail - cost, ExpectedFeeRUB: expectedFee, RetailRUB: retail, ProviderRateVersion: "mock-rates-v2"})
+	}
+	return result
+}
+
+func calculateRetail(providerCost int, pricing PricingConfig) (int, int, error) {
+	retail := providerCost + pricing.FixedMarkupRUB
+	if pricing.ExpectedFeeBPS > 0 {
+		if pricing.ExpectedFeeBPS >= 10000 {
+			return 0, 0, errors.New("expected payment fee must be below 100 percent")
+		}
+		minimumRetail := int(math.Ceil(float64(providerCost+pricing.MinimumMargin) * 10000 / float64(10000-pricing.ExpectedFeeBPS)))
+		if minimumRetail > retail {
+			retail = minimumRetail
+		}
+	}
+	expectedFee := pricing.ExpectedFeeRUB
+	if pricing.ExpectedFeeBPS > 0 {
+		expectedFee = int(math.Ceil(float64(retail*pricing.ExpectedFeeBPS) / 10000))
+	}
+	if retail-providerCost-expectedFee < pricing.MinimumMargin {
+		return 0, 0, fmt.Errorf("pricing policy leaves less than %d RUB margin", pricing.MinimumMargin)
+	}
+	return retail, expectedFee, nil
 }
 
 func (s *Service) CreateOrder(ctx context.Context, quoteID string, telegramUserID int64, idempotencyKey string) (Order, error) {

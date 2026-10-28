@@ -7,3 +7,4 @@ bin/
 .gocache/
 coverage.out
 *.log
+.local/
