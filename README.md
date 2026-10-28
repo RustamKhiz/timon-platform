@@ -171,7 +171,9 @@ go run ./cmd/sim-api
 The API normally loads the latest published USD/RUB rate from the official CBR
 XML endpoint, applies `SIM_FX_BUFFER_BPS` (500 by default), and caches it for six
 hours. `SIM_USD_RUB_RATE` is only an optional outage fallback and does not need
-daily manual updates. Every quote snapshots the actual rate and source version.
+daily manual updates. When the staging variable is absent, CI calculates and
+seals the buffered fallback automatically during deployment. Every quote
+snapshots the actual rate and source version.
 Sandbox catalogue mode remains paired with mock payment and mock fulfillment;
 it never calls Keepgo line-creation endpoints.
 

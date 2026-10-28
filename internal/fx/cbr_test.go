@@ -15,8 +15,11 @@ func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) 
 
 func TestCBRUSDProviderAppliesBufferAndCaches(t *testing.T) {
 	calls := 0
-	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
+		if request.Header.Get("User-Agent") == "" {
+			t.Fatal("User-Agent is required")
+		}
 		body := `<?xml version="1.0" encoding="windows-1251"?><ValCurs Date="28.10.2026"><Valute><CharCode>USD</CharCode><Nominal>1</Nominal><Value>80,5307</Value></Valute></ValCurs>`
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
 	})}

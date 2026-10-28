@@ -120,6 +120,29 @@ jobs:
           test -n "$SIM_TUNNEL_KNOWN_HOSTS"
           test -n "$KEEPGO_API_KEY"
           test -n "$KEEPGO_ACCESS_TOKEN"
+          if [ -z "$SIM_USD_RUB_RATE" ]; then
+            SIM_USD_RUB_RATE="$(python3 - <<'PY'
+          import urllib.request
+          import xml.etree.ElementTree as ET
+
+          request = urllib.request.Request(
+              "https://www.cbr.ru/scripts/XML_daily_eng.asp",
+              headers={"User-Agent": "TIMON-SIM-CI/1.0"},
+          )
+          with urllib.request.urlopen(request, timeout=15) as response:
+              root = ET.fromstring(response.read())
+          for item in root.findall("Valute"):
+              if item.findtext("CharCode") == "USD":
+                  nominal = int(item.findtext("Nominal"))
+                  value = float(item.findtext("Value").replace(",", "."))
+                  print(f"{value / nominal * 1.05:.4f}")
+                  break
+          else:
+              raise SystemExit("USD rate is absent in CBR response")
+          PY
+            )"
+          fi
+          test -n "$SIM_USD_RUB_RATE"
           umask 077
           mkdir -p release-config
           cat >release-config/api.env <<EOF

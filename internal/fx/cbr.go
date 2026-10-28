@@ -102,6 +102,7 @@ func (p *CBRUSDProvider) fetch(ctx context.Context) (float64, string, error) {
 		return 0, "", fmt.Errorf("build CBR FX request: %w", err)
 	}
 	req.Header.Set("Accept", "application/xml")
+	req.Header.Set("User-Agent", "TIMON-SIM/1.0 (+https://github.com/RustamKhiz/timon-platform)")
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		return 0, "", fmt.Errorf("call CBR FX endpoint: %w", err)

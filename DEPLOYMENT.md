@@ -30,10 +30,11 @@ Create a protected `staging` environment with these secrets:
 - `KEEPGO_SANDBOX_API_KEY`
 - `KEEPGO_SANDBOX_ACCESS_TOKEN`
 
-Set the non-secret staging environment variable `SIM_USD_RUB_RATE` once as an
-optional outage fallback. Normal pricing loads the latest published CBR rate,
-adds the configured 5% buffer and caches it. Existing quote and order snapshots
-remain unchanged when the daily rate changes.
+`SIM_USD_RUB_RATE` is optional. If it is absent, the deployment job reads the
+latest published CBR rate, adds 5%, and seals that value into the server config
+as an outage fallback. At runtime the API still attempts to refresh the official
+rate and caches successful responses. Existing quote and order snapshots remain
+unchanged when the daily rate changes.
 
 The pipeline renders the API and PostgreSQL environment files on the ephemeral
 GitHub runner, uploads them together with the tracked PostgreSQL Compose file
