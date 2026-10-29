@@ -31,7 +31,7 @@ func TestEngineSupportsTelegramCommandsAndMockLabel(t *testing.T) {
 	}
 
 	response, err := engine.Handle(ctx, 42, "/buy")
-	if err != nil || len(response.Buttons) != 1 || response.Buttons[0][0].Data != "country:TR" {
+	if err != nil || len(response.Buttons) != 2 || response.Buttons[0][0].Data != "country:TR" {
 		t.Fatalf("/buy response = %+v, err = %v", response, err)
 	}
 	if response.Buttons[0][0].Text != "🇹🇷 Турция" {
@@ -62,9 +62,12 @@ func (f *fakeClient) Countries(context.Context) ([]sim.Country, error) {
 	return []sim.Country{{Code: "TR", Name: "Турция"}}, nil
 }
 func (f *fakeClient) Packages(context.Context, string) ([]sim.Package, error) {
-	return []sim.Package{{ID: "keepgo:29:data:20480:30", CountryCode: "TR", Name: "20 GB / 30 days", RetailRUB: 916}}, nil
+	return []sim.Package{{ID: "keepgo:29:data:20480:30", CountryCode: "TR", Name: "20 GB / 30 days", DataMB: 20 * 1024, ValidityDays: 30, RetailRUB: 916}}, nil
 }
 func (f *fakeClient) CreateQuote(_ context.Context, selection sim.Selection) (sim.Quote, error) {
+	selection.PackageName = "20 GB / 30 days"
+	selection.TotalDataMB = 20 * 1024
+	selection.DurationDays = 30
 	f.selection = selection
 	return sim.Quote{ID: "q_1", Selection: selection, RetailRUB: 520, ExpiresAt: time.Now().Add(15 * time.Minute)}, nil
 }
@@ -95,17 +98,72 @@ func TestEngineCountryPackageFlow(t *testing.T) {
 	ctx := context.Background()
 
 	response, err := engine.Handle(ctx, 42, "buy")
-	if err != nil || len(response.Buttons) != 1 || response.Buttons[0][0].Data != "country:TR" {
+	if err != nil || len(response.Buttons) != 2 || response.Buttons[0][0].Data != "country:TR" {
 		t.Fatalf("country menu = %+v, err = %v", response, err)
 	}
 	response, err = engine.Handle(ctx, 42, "country:TR")
-	if err != nil || len(response.Buttons) != 2 || response.Buttons[0][0].Data != "package:keepgo:29:data:20480:30" {
+	if err != nil || len(response.Buttons) != 3 || response.Buttons[0][0].Data != "package:keepgo:29:data:20480:30" {
 		t.Fatalf("package menu = %+v, err = %v", response, err)
 	}
 	response, err = engine.Handle(ctx, 42, "package:keepgo:29:data:20480:30")
-	if err != nil || client.selection != (sim.Selection{CountryCode: "TR", PackageID: "keepgo:29:data:20480:30"}) {
+	if err != nil || client.selection.CountryCode != "TR" || client.selection.PackageID != "keepgo:29:data:20480:30" {
 		t.Fatalf("selection = %+v, response = %+v, err = %v", client.selection, response, err)
 	}
+	if !strings.Contains(response.Text, "20 ГБ · 30 дней") || !strings.Contains(response.Text, "≈ 26 ₽ за 1 ГБ") {
+		t.Fatalf("package details = %q", response.Text)
+	}
+	if response.Buttons[0][0].Data != "compat:q_1|TR" {
+		t.Fatalf("package details buttons = %+v", response.Buttons)
+	}
+
+	response, err = engine.Handle(ctx, 42, "compat:q_1|TR")
+	if err != nil || response.Buttons[2][0].Data != "confirm:q_1" {
+		t.Fatalf("compatibility response = %+v, err = %v", response, err)
+	}
+	for _, row := range response.Buttons {
+		for _, button := range row {
+			if len(button.Data) > 64 {
+				t.Fatalf("callback_data exceeds Telegram limit: %q", button.Data)
+			}
+		}
+	}
+	response, err = engine.Handle(ctx, 42, "confirm:q_1")
+	if err != nil || !strings.Contains(response.Text, "Тестовый заказ создан") {
+		t.Fatalf("confirmed order response = %+v, err = %v", response, err)
+	}
+}
+
+func TestEngineProvidesProductHelpAndCompatibility(t *testing.T) {
+	engine := NewEngine(&fakeClient{})
+	ctx := context.Background()
+
+	menu, err := engine.Handle(ctx, 42, "/start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, callback := range []string{"buy", "my", "how", "compatibility", "faq", "support"} {
+		if !hasCallback(menu, callback) {
+			t.Fatalf("main menu does not contain %q: %+v", callback, menu.Buttons)
+		}
+	}
+
+	for _, input := range []string{"how", "/help", "compatibility", "compatibility:ios", "compatibility:android", "faq:activation", "faq:installation", "faq:refund"} {
+		response, err := engine.Handle(ctx, 42, input)
+		if err != nil || !strings.HasPrefix(response.Text, "ТЕСТ / SANDBOX") || !hasCallback(response, "menu") {
+			t.Fatalf("Handle(%q) response = %+v, err = %v", input, response, err)
+		}
+	}
+}
+
+func hasCallback(response Response, callback string) bool {
+	for _, row := range response.Buttons {
+		for _, button := range row {
+			if button.Data == callback {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func TestEngineReturnsQRCodeAndInstallationInstructions(t *testing.T) {
