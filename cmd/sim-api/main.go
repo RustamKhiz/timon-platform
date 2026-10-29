@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/RustamKhiz/timon-platform/internal/adminauth"
 	"github.com/RustamKhiz/timon-platform/internal/fx"
 	"github.com/RustamKhiz/timon-platform/internal/httpapi"
 	"github.com/RustamKhiz/timon-platform/internal/keepgo"
@@ -89,6 +90,18 @@ func main() {
 		os.Exit(2)
 	}
 	service := sim.NewServiceWithCatalog(pricing, repository, catalog)
+	var adminManager *adminauth.Manager
+	adminUsername := os.Getenv("SIM_ADMIN_USERNAME")
+	adminPasswordHash := os.Getenv("SIM_ADMIN_PASSWORD_BCRYPT")
+	adminSessionSecret := os.Getenv("SIM_ADMIN_SESSION_SECRET")
+	if adminUsername != "" || adminPasswordHash != "" || adminSessionSecret != "" {
+		var err error
+		adminManager, err = adminauth.New(adminUsername, adminPasswordHash, adminSessionSecret, 12*time.Hour)
+		if err != nil {
+			logger.Error("could not configure SIM admin authentication", "error", err)
+			os.Exit(2)
+		}
+	}
 	if catalog != nil {
 		warmupCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		_, err := service.Packages(warmupCtx, "TR")
@@ -99,8 +112,11 @@ func main() {
 		}
 	}
 	server := &http.Server{
-		Addr:              address,
-		Handler:           httpapi.New(service, logger, httpapi.Config{BotToken: apiToken, StorageMode: storageMode, ProviderMode: providerMode}),
+		Addr: address,
+		Handler: httpapi.New(service, logger, httpapi.Config{
+			BotToken: apiToken, StorageMode: storageMode, ProviderMode: providerMode,
+			AdminAuth: adminManager, AdminCookieSecure: boolEnvOrDefault("SIM_ADMIN_COOKIE_SECURE", true),
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -141,4 +157,16 @@ func intEnvOrDefault(name string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func boolEnvOrDefault(name string, fallback bool) bool {
+	value := os.Getenv(name)
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseBool(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }

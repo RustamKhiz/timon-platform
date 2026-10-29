@@ -228,6 +228,30 @@ func (s *Store) OrdersForUser(ctx context.Context, telegramUserID int64) ([]sim.
 	return orders, nil
 }
 
+func (s *Store) AdminOrder(ctx context.Context, orderID string) (sim.Order, error) {
+	return queryOrder(ctx, s.pool, `WHERE o.id = $1`, orderID)
+}
+
+func (s *Store) AdminOrders(ctx context.Context) ([]sim.Order, error) {
+	rows, err := s.pool.Query(ctx, orderSelect+` ORDER BY o.created_at DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("list admin orders: %w", err)
+	}
+	defer rows.Close()
+	orders := make([]sim.Order, 0)
+	for rows.Next() {
+		order, err := scanOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		orders = append(orders, order)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate admin orders: %w", err)
+	}
+	return orders, nil
+}
+
 type queryer interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }

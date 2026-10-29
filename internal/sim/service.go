@@ -50,6 +50,8 @@ type Repository interface {
 	MarkDelivered(context.Context, string, int64, time.Time) (Order, error)
 	GetOrder(context.Context, string, int64) (Order, error)
 	OrdersForUser(context.Context, int64) ([]Order, error)
+	AdminOrder(context.Context, string) (Order, error)
+	AdminOrders(context.Context) ([]Order, error)
 }
 
 type Service struct {
@@ -308,6 +310,14 @@ func (s *Service) OrdersForUser(ctx context.Context, telegramUserID int64) ([]Or
 	return s.store.OrdersForUser(ctx, telegramUserID)
 }
 
+func (s *Service) AdminOrder(ctx context.Context, orderID string) (Order, error) {
+	return s.store.AdminOrder(ctx, orderID)
+}
+
+func (s *Service) AdminOrders(ctx context.Context) ([]Order, error) {
+	return s.store.AdminOrders(ctx)
+}
+
 func (s *memoryStore) SaveQuote(ctx context.Context, quote Quote) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -421,6 +431,33 @@ func (s *memoryStore) OrdersForUser(ctx context.Context, telegramUserID int64) (
 		if order.TelegramUserID == telegramUserID {
 			orders = append(orders, order)
 		}
+	}
+	sort.Slice(orders, func(i, j int) bool { return orders[i].CreatedAt.After(orders[j].CreatedAt) })
+	return orders, nil
+}
+
+func (s *memoryStore) AdminOrder(ctx context.Context, orderID string) (Order, error) {
+	if err := ctx.Err(); err != nil {
+		return Order{}, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	order, ok := s.orders[orderID]
+	if !ok {
+		return Order{}, ErrNotFound
+	}
+	return order, nil
+}
+
+func (s *memoryStore) AdminOrders(ctx context.Context) ([]Order, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	orders := make([]Order, 0, len(s.orders))
+	for _, order := range s.orders {
+		orders = append(orders, order)
 	}
 	sort.Slice(orders, func(i, j int) bool { return orders[i].CreatedAt.After(orders[j].CreatedAt) })
 	return orders, nil

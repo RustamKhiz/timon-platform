@@ -111,6 +111,9 @@ jobs:
           SIM_TUNNEL_KNOWN_HOSTS: ${{ secrets.SIM_TUNNEL_KNOWN_HOSTS }}
           KEEPGO_API_KEY: ${{ secrets.KEEPGO_SANDBOX_API_KEY }}
           KEEPGO_ACCESS_TOKEN: ${{ secrets.KEEPGO_SANDBOX_ACCESS_TOKEN }}
+          SIM_ADMIN_USERNAME: ${{ secrets.SIM_ADMIN_USERNAME }}
+          SIM_ADMIN_PASSWORD_BCRYPT: ${{ secrets.SIM_ADMIN_PASSWORD_BCRYPT }}
+          SIM_ADMIN_SESSION_SECRET: ${{ secrets.SIM_ADMIN_SESSION_SECRET }}
           SIM_USD_RUB_RATE: ${{ vars.SIM_USD_RUB_RATE }}
         run: |
           set -eu
@@ -120,6 +123,9 @@ jobs:
           test -n "$SIM_TUNNEL_KNOWN_HOSTS"
           test -n "$KEEPGO_API_KEY"
           test -n "$KEEPGO_ACCESS_TOKEN"
+          test -n "$SIM_ADMIN_USERNAME"
+          test -n "$SIM_ADMIN_PASSWORD_BCRYPT"
+          test -n "$SIM_ADMIN_SESSION_SECRET"
           if [ -z "$SIM_USD_RUB_RATE" ]; then
             SIM_USD_RUB_RATE="$(python3 - <<'PY'
           import urllib.request
@@ -157,6 +163,10 @@ jobs:
           KEEPGO_BASE_URL=https://myaccount.sandbox.keepgo.com/api/v2
           KEEPGO_API_KEY=$KEEPGO_API_KEY
           KEEPGO_ACCESS_TOKEN=$KEEPGO_ACCESS_TOKEN
+          SIM_ADMIN_USERNAME=$SIM_ADMIN_USERNAME
+          SIM_ADMIN_PASSWORD_BCRYPT=$SIM_ADMIN_PASSWORD_BCRYPT
+          SIM_ADMIN_SESSION_SECRET=$SIM_ADMIN_SESSION_SECRET
+          SIM_ADMIN_COOKIE_SECURE=true
           EOF
           printf 'POSTGRES_PASSWORD=%s\n' "$SIM_DATABASE_PASSWORD" >release-config/postgres.env
           cp deploy/postgres/compose.yaml release-config/compose.yaml

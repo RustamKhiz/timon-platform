@@ -6,10 +6,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/RustamKhiz/timon-platform/internal/adminauth"
 	"github.com/RustamKhiz/timon-platform/internal/sim"
+	"golang.org/x/crypto/bcrypt"
 )
 
 func TestMockVerticalSliceHTTP(t *testing.T) {
@@ -110,6 +114,56 @@ func TestBotAuthentication(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("authenticated status = %d", response.StatusCode)
+	}
+}
+
+func TestAdminAuthenticationAndReadOnlyOrders(t *testing.T) {
+	hash, err := bcrypt.GenerateFromPassword([]byte("admin-password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := adminauth.New("owner", string(hash), "01234567890123456789012345678901", time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := sim.NewService(sim.PricingConfig{FixedMarkupRUB: 100})
+	server := httptest.NewServer(New(service, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{AdminAuth: manager}))
+	defer server.Close()
+
+	response, err := http.Get(server.URL + "/api/v1/admin/orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated admin status = %d", response.StatusCode)
+	}
+
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	loginBody, err := json.Marshal(map[string]string{"username": "owner", "password": "admin-password"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginResponse, err := client.Post(server.URL+"/api/v1/admin/auth/login", "application/json", bytes.NewReader(loginBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginResponse.Body.Close()
+	if loginResponse.StatusCode != http.StatusOK {
+		t.Fatalf("login status = %d", loginResponse.StatusCode)
+	}
+
+	response, err = client.Get(server.URL + "/api/v1/admin/orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("authenticated admin status = %d", response.StatusCode)
 	}
 }
 

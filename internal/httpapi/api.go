@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/RustamKhiz/timon-platform/internal/adminauth"
 	"github.com/RustamKhiz/timon-platform/internal/sim"
 )
 
@@ -20,10 +22,14 @@ type API struct {
 }
 
 type Config struct {
-	BotToken     string
-	StorageMode  string
-	ProviderMode string
+	BotToken          string
+	StorageMode       string
+	ProviderMode      string
+	AdminAuth         *adminauth.Manager
+	AdminCookieSecure bool
 }
+
+const adminSessionCookie = "timon_sim_admin_session"
 
 func New(service *sim.Service, logger *slog.Logger, configs ...Config) http.Handler {
 	config := Config{StorageMode: "memory"}
@@ -41,6 +47,11 @@ func New(service *sim.Service, logger *slog.Logger, configs ...Config) http.Hand
 	mux.HandleFunc("GET /api/v1/sim/orders/{id}", api.getOrder)
 	mux.HandleFunc("POST /api/v1/sim/orders/{id}/mock-payment", api.mockPayment)
 	mux.HandleFunc("POST /api/v1/sim/orders/{id}/delivered", api.markDelivered)
+	mux.HandleFunc("POST /api/v1/admin/auth/login", api.adminLogin)
+	mux.HandleFunc("POST /api/v1/admin/auth/logout", api.adminLogout)
+	mux.Handle("GET /api/v1/admin/session", api.requireAdmin(http.HandlerFunc(api.adminSession)))
+	mux.Handle("GET /api/v1/admin/orders", api.requireAdmin(http.HandlerFunc(api.adminOrders)))
+	mux.Handle("GET /api/v1/admin/orders/{id}", api.requireAdmin(http.HandlerFunc(api.adminOrder)))
 	return logging(logger, authenticate(config.BotToken, mux))
 }
 
@@ -110,6 +121,9 @@ func (a *API) listOrders(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
+	for index := range orders {
+		orders[index].Activation = nil
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"orders": orders})
 }
 
@@ -153,6 +167,80 @@ func (a *API) markDelivered(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, order)
+}
+
+func (a *API) adminLogin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if a.config.AdminAuth == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "admin access is not configured"})
+		return
+	}
+	var request struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := decodeJSON(r, &request); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if !a.config.AdminAuth.Authenticate(request.Username, request.Password) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "invalid credentials"})
+		return
+	}
+	now := time.Now().UTC()
+	http.SetCookie(w, &http.Cookie{
+		Name: adminSessionCookie, Value: a.config.AdminAuth.Issue(now), Path: "/api/v1/admin",
+		MaxAge: int(a.config.AdminAuth.TTL().Seconds()), HttpOnly: true, Secure: a.config.AdminCookieSecure,
+		SameSite: http.SameSiteStrictMode,
+	})
+	writeJSON(w, http.StatusOK, map[string]string{"username": request.Username})
+}
+
+func (a *API) adminLogout(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	http.SetCookie(w, &http.Cookie{
+		Name: adminSessionCookie, Value: "", Path: "/api/v1/admin", MaxAge: -1,
+		HttpOnly: true, Secure: a.config.AdminCookieSecure, SameSite: http.SameSiteStrictMode,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) adminSession(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
+}
+
+func (a *API) adminOrders(w http.ResponseWriter, r *http.Request) {
+	orders, err := a.service.AdminOrders(r.Context())
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"orders": orders})
+}
+
+func (a *API) adminOrder(w http.ResponseWriter, r *http.Request) {
+	order, err := a.service.AdminOrder(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, order)
+}
+
+func (a *API) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-store")
+		if a.config.AdminAuth == nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "admin access is not configured"})
+			return
+		}
+		cookie, err := r.Cookie(adminSessionCookie)
+		if err != nil || a.config.AdminAuth.Verify(cookie.Value, time.Now().UTC()) != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func telegramUserID(r *http.Request) (int64, error) {
