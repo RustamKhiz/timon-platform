@@ -19,6 +19,7 @@ type Button struct {
 type Response struct {
 	Text             string
 	Buttons          [][]Button
+	ReplyKeyboard    [][]string
 	Photo            []byte
 	PhotoFilename    string
 	DeliveredOrderID string
@@ -93,6 +94,18 @@ func (e *Engine) Handle(ctx context.Context, userID int64, input string) (Respon
 		return e.mockPay(ctx, userID, strings.TrimPrefix(input, "pay:"))
 	case strings.HasPrefix(input, "esim:"):
 		return e.esimDetails(ctx, userID, strings.TrimPrefix(input, "esim:"))
+	case strings.HasPrefix(input, "details:"):
+		return e.orderDetails(ctx, userID, strings.TrimPrefix(input, "details:"))
+	case strings.HasPrefix(input, "guide-ios:"):
+		return installationGuide("ios", strings.TrimPrefix(input, "guide-ios:")), nil
+	case strings.HasPrefix(input, "guide-android:"):
+		return installationGuide("android", strings.TrimPrefix(input, "guide-android:")), nil
+	case strings.HasPrefix(input, "guide-manual:"):
+		return e.manualInstallation(ctx, userID, strings.TrimPrefix(input, "guide-manual:"))
+	case strings.HasPrefix(input, "support-order:"):
+		return orderSupport(strings.TrimPrefix(input, "support-order:")), nil
+	case strings.HasPrefix(input, "support-topic:"):
+		return supportTopic(strings.TrimPrefix(input, "support-topic:")), nil
 	default:
 		return mainMenu(), nil
 	}
@@ -101,13 +114,11 @@ func (e *Engine) Handle(ctx context.Context, userID int64, input string) (Respon
 func mainMenu() Response {
 	return Response{
 		Text: "ТЕСТ / SANDBOX\n\nTIMON SIM — мобильный интернет для поездок без физической SIM-карты.\n\nВыберите страну и пакет, проверьте совместимость телефона и пройдите тестовое оформление. Реальные платежи и активация сети пока выключены.",
-		Buttons: [][]Button{
-			{{Text: "🌍 Купить eSIM", Data: "buy"}},
-			{{Text: "📱 Мои eSIM", Data: "my"}},
-			{{Text: "ℹ️ Как это работает", Data: "how"}},
-			{{Text: "✅ Проверить совместимость", Data: "compatibility"}},
-			{{Text: "❓ Вопросы и ответы", Data: "faq"}},
-			{{Text: "🛟 Поддержка", Data: "support"}},
+		ReplyKeyboard: [][]string{
+			{"🏠 Главное меню"},
+			{"🌍 Купить eSIM", "📱 Мои eSIM"},
+			{"ℹ️ Как это работает", "✅ Совместимость"},
+			{"❓ Вопросы и ответы", "🛟 Поддержка"},
 		},
 	}
 }
@@ -206,22 +217,26 @@ func (e *Engine) selectCountry(ctx context.Context, userID int64, code string) (
 	}
 	buttons := make([][]Button, 0, len(packages)+1)
 	for _, pkg := range packages {
-		buttons = append(buttons, []Button{{Text: fmt.Sprintf("%s · %d дней — %d ₽", formatData(pkg.DataMB), pkg.ValidityDays, pkg.RetailRUB), Data: "package:" + pkg.ID}})
+		buttons = append(buttons, []Button{{Text: fmt.Sprintf("%s · %d дней — %d ₽", formatData(pkg.DataMB), pkg.ValidityDays, pkg.RetailRUB), Data: "package:" + code + "|" + pkg.ID}})
 	}
 	buttons = append(buttons, []Button{{Text: "Выбрать другую страну", Data: "buy"}})
 	buttons = append(buttons, []Button{{Text: "В меню", Data: "menu"}})
 	return Response{Text: fmt.Sprintf("ТЕСТ / SANDBOX\n\n%s\n\nВыберите пакет. Объём указан на весь срок действия:\n\n• 5 ГБ — мессенджеры и навигация\n• 10 ГБ — оптимальный выбор\n• 20 ГБ — активное использование", countryTitle(code)), Buttons: buttons}, nil
 }
 
-func (e *Engine) selectPackage(ctx context.Context, userID int64, packageID string) (Response, error) {
-	e.mu.Lock()
-	selection, ok := e.users[userID]
-	e.mu.Unlock()
-	if !ok || selection.CountryCode == "" {
-		return Response{}, errorsNew("сначала выберите страну")
+func (e *Engine) selectPackage(ctx context.Context, userID int64, packageContext string) (Response, error) {
+	countryCode, packageID := splitPackageContext(packageContext)
+	if countryCode == "" {
+		e.mu.Lock()
+		selection, ok := e.users[userID]
+		e.mu.Unlock()
+		if !ok || selection.CountryCode == "" {
+			return Response{}, errorsNew("сначала выберите страну")
+		}
+		countryCode = selection.CountryCode
 	}
 	quote, err := e.client.CreateQuote(ctx, sim.Selection{
-		CountryCode: selection.CountryCode,
+		CountryCode: countryCode,
 		PackageID:   packageID,
 	})
 	if err != nil {
@@ -240,9 +255,17 @@ func (e *Engine) selectPackage(ctx context.Context, userID int64, packageID stri
 		perGB := int(math.Ceil(float64(quote.RetailRUB) / (float64(quote.Selection.TotalDataMB) / 1024)))
 		pricePerGB = fmt.Sprintf("\n≈ %d ₽ за 1 ГБ", perGB)
 	}
-	text := fmt.Sprintf("ТЕСТ / SANDBOX\n\n%s\n\n%s%s\n%s\n\nЦена: %d ₽%s\nЦена действительна 15 минут.\n\nПеред оформлением убедитесь, что телефон поддерживает eSIM.", countryTitle(selection.CountryCode), dataLabel, daysLabel, packageRecommendation(quote.Selection.TotalDataMB), quote.RetailRUB, pricePerGB)
-	context := quote.ID + "|" + selection.CountryCode
-	return Response{Text: text, Buttons: [][]Button{{{Text: "✅ Проверить совместимость", Data: "compat:" + context}}, {{Text: "Выбрать другой тариф", Data: "country:" + selection.CountryCode}}, {{Text: "Выбрать другую страну", Data: "buy"}}, {{Text: "В меню", Data: "menu"}}}}, nil
+	text := fmt.Sprintf("ТЕСТ / SANDBOX\n\n%s\n\n%s%s\n%s\n\nЦена: %d ₽%s\nЦена действительна 15 минут.\n\nПеред оформлением убедитесь, что телефон поддерживает eSIM.", countryTitle(countryCode), dataLabel, daysLabel, packageRecommendation(quote.Selection.TotalDataMB), quote.RetailRUB, pricePerGB)
+	context := quote.ID + "|" + countryCode
+	return Response{Text: text, Buttons: [][]Button{{{Text: "✅ Проверить совместимость", Data: "compat:" + context}}, {{Text: "Выбрать другой тариф", Data: "country:" + countryCode}}, {{Text: "Выбрать другую страну", Data: "buy"}}, {{Text: "В меню", Data: "menu"}}}}, nil
+}
+
+func splitPackageContext(value string) (string, string) {
+	separator := strings.IndexByte(value, '|')
+	if separator <= 0 || separator == len(value)-1 {
+		return "", value
+	}
+	return value[:separator], value[separator+1:]
 }
 
 func compatibilityResponse(platform, quoteID, countryCode string) Response {
@@ -342,14 +365,88 @@ func activationResponse(order sim.Order) (Response, error) {
 	if err != nil {
 		return Response{}, fmt.Errorf("generate mock activation QR: %w", err)
 	}
-	text := fmt.Sprintf("ТЕСТ / MOCK\n\nТестовая eSIM готова. QR и данные ниже не работают в реальной сети.\n\nУстановка:\n• iPhone: Настройки → Сотовая связь → Добавить eSIM → Использовать QR-код.\n• Android: Настройки → Сеть и интернет / SIM → Добавить eSIM → Сканировать QR-код.\n\nРучная установка:\nSM-DP+: %s\nКод: %s\nLPA: %s", activation.SMAddress, activation.ActivationCode, activation.ManualCode)
+	text := fmt.Sprintf("ТЕСТ / MOCK\n\n✅ eSIM для %s готова\nЗаказ %s\n\nОтсканируйте QR-код в настройках телефона. Этот тестовый QR не работает в реальной сети. Не удаляйте установленную eSIM до окончания поездки.", countryTitle(order.Quote.Selection.CountryCode), publicOrderID(order.ID))
 	return Response{
-		Text:             text,
-		Buttons:          [][]Button{{{Text: "Мои eSIM", Data: "my"}}, {{Text: "В меню", Data: "menu"}}},
+		Text: text,
+		Buttons: [][]Button{
+			{{Text: "Инструкция для iPhone", Data: "guide-ios:" + order.ID}},
+			{{Text: "Инструкция для Android", Data: "guide-android:" + order.ID}},
+			{{Text: "Ручная установка", Data: "guide-manual:" + order.ID}},
+			{{Text: "Открыть заказ", Data: "details:" + order.ID}},
+			{{Text: "Мои eSIM", Data: "my"}},
+			{{Text: "В меню", Data: "menu"}},
+		},
 		Photo:            png,
 		PhotoFilename:    "timon-sim-mock-qr.png",
 		DeliveredOrderID: order.ID,
 	}, nil
+}
+
+func (e *Engine) orderDetails(ctx context.Context, userID int64, orderID string) (Response, error) {
+	order, err := e.client.Order(ctx, orderID, userID)
+	if err != nil {
+		return Response{}, err
+	}
+	selection := order.Quote.Selection
+	text := fmt.Sprintf("ТЕСТ / MOCK\n\n%s\n%s\nЗаказ: %s\nСтатус: %s", countryTitle(selection.CountryCode), selectionLabel(selection), publicOrderID(order.ID), orderStatusLabel(order))
+	buttons := make([][]Button, 0, 8)
+	if order.PaymentStatus == "pending" || order.OrderStatus == "awaiting_payment" {
+		buttons = append(buttons, []Button{{Text: "Подтвердить mock-оплату", Data: "pay:" + order.ID}})
+	}
+	if order.Activation != nil && order.Activation.IsMock {
+		buttons = append(buttons, []Button{{Text: "Показать QR-код", Data: "esim:" + order.ID}})
+		buttons = append(buttons, []Button{{Text: "Инструкция для iPhone", Data: "guide-ios:" + order.ID}})
+		buttons = append(buttons, []Button{{Text: "Инструкция для Android", Data: "guide-android:" + order.ID}})
+		buttons = append(buttons, []Button{{Text: "Ручная установка", Data: "guide-manual:" + order.ID}})
+	}
+	buttons = append(buttons, []Button{{Text: "Нужна помощь", Data: "support-order:" + order.ID}})
+	buttons = append(buttons, []Button{{Text: "Назад к моим eSIM", Data: "my"}})
+	buttons = append(buttons, []Button{{Text: "В меню", Data: "menu"}})
+	return Response{Text: text, Buttons: buttons}, nil
+}
+
+func installationGuide(platform, orderID string) Response {
+	text := "ТЕСТ / MOCK\n\nУстановка на Android\n\n1. Подключитесь к Wi‑Fi.\n2. Откройте Настройки → Сеть и интернет / Подключения.\n3. Выберите SIM-карты → Добавить eSIM.\n4. Отсканируйте QR из TIMON SIM.\n5. В стране поездки включите эту eSIM и роуминг данных.\n\nНазвания разделов зависят от производителя. Не удаляйте eSIM до окончания поездки."
+	if platform == "ios" {
+		text = "ТЕСТ / MOCK\n\nУстановка на iPhone\n\n1. Подключитесь к Wi‑Fi.\n2. Откройте Настройки → Сотовая связь.\n3. Нажмите «Добавить eSIM» → «Использовать QR-код».\n4. Отсканируйте QR из TIMON SIM.\n5. Назовите линию, например «Путешествие».\n6. В стране поездки включите эту линию и роуминг данных.\n\nНе удаляйте eSIM до окончания поездки."
+	}
+	return Response{Text: text, Buttons: [][]Button{{{Text: "Показать QR-код", Data: "esim:" + orderID}}, {{Text: "Открыть заказ", Data: "details:" + orderID}}, {{Text: "В меню", Data: "menu"}}}}
+}
+
+func (e *Engine) manualInstallation(ctx context.Context, userID int64, orderID string) (Response, error) {
+	order, err := e.client.Order(ctx, orderID, userID)
+	if err != nil {
+		return Response{}, err
+	}
+	activation := order.Activation
+	if activation == nil || !activation.IsMock {
+		return Response{}, errorsNew("тестовая eSIM ещё не готова")
+	}
+	text := fmt.Sprintf("ТЕСТ / MOCK\n\nРучная установка\nЗаказ: %s\n\nSM-DP+: %s\nКод активации: %s\nLPA: %s\n\nНе пересылайте эти данные другим людям. Текущие значения синтетические и не работают в реальной сети.", publicOrderID(order.ID), activation.SMAddress, activation.ActivationCode, activation.ManualCode)
+	return Response{Text: text, Buttons: [][]Button{{{Text: "Показать QR-код", Data: "esim:" + order.ID}}, {{Text: "Открыть заказ", Data: "details:" + order.ID}}, {{Text: "В меню", Data: "menu"}}}}, nil
+}
+
+func orderSupport(orderID string) Response {
+	context := "|" + orderID
+	return Response{Text: fmt.Sprintf("ТЕСТ / MOCK\n\nПомощь по заказу %s\n\nВыберите проблему. В закрытом тесте обращение не отправляется автоматически — бот подготовит безопасный номер заказа для владельца тестирования.", publicOrderID(orderID)), Buttons: [][]Button{{{Text: "Проблема с установкой", Data: "support-topic:install" + context}}, {{Text: "Нет интернета", Data: "support-topic:network" + context}}, {{Text: "Не получил eSIM", Data: "support-topic:delivery" + context}}, {{Text: "Другой вопрос", Data: "support-topic:other" + context}}, {{Text: "Открыть заказ", Data: "details:" + orderID}}, {{Text: "В меню", Data: "menu"}}}}
+}
+
+func supportTopic(value string) Response {
+	topic, orderID := splitSupportContext(value)
+	labels := map[string]string{"install": "Проблема с установкой", "network": "Нет интернета", "delivery": "Не получил eSIM", "other": "Другой вопрос"}
+	label := labels[topic]
+	if label == "" {
+		label = "Вопрос по заказу"
+	}
+	return Response{Text: fmt.Sprintf("ТЕСТ / MOCK\n\n%s\nЗаказ: %s\n\nСообщите владельцу тестирования этот номер заказа и кратко опишите проблему. QR-код, LPA и код активации пересылать не нужно.", label, publicOrderID(orderID)), Buttons: [][]Button{{{Text: "Назад к помощи", Data: "support-order:" + orderID}}, {{Text: "Открыть заказ", Data: "details:" + orderID}}, {{Text: "В меню", Data: "menu"}}}}
+}
+
+func splitSupportContext(value string) (string, string) {
+	separator := strings.IndexByte(value, '|')
+	if separator <= 0 || separator == len(value)-1 {
+		return "other", value
+	}
+	return value[:separator], value[separator+1:]
 }
 
 func (e *Engine) myESIMs(ctx context.Context, userID int64) (Response, error) {
@@ -361,24 +458,76 @@ func (e *Engine) myESIMs(ctx context.Context, userID int64) (Response, error) {
 		return Response{Text: "ТЕСТ / MOCK\n\nУ вас пока нет тестовых eSIM.", Buttons: [][]Button{{{Text: "Купить eSIM", Data: "buy"}}}}, nil
 	}
 	var text strings.Builder
-	text.WriteString("ТЕСТ / MOCK\n\nВаши тестовые eSIM:\n")
+	text.WriteString("ТЕСТ / MOCK\n\nМои eSIM")
 	buttons := make([][]Button, 0, len(orders)+1)
-	for index, order := range orders {
-		if order.Quote.Selection.PackageName != "" {
-			fmt.Fprintf(&text, "\n%s — %s, %s — %s", order.ID, order.Quote.Selection.CountryCode, order.Quote.Selection.PackageName, order.OrderStatus)
-		} else {
-			fmt.Fprintf(&text, "\n%s — %s, %d дней, %d ГБ/день — %s", order.ID, order.Quote.Selection.CountryCode, order.Quote.Selection.DurationDays, order.Quote.Selection.GigabytesPerDay, order.OrderStatus)
-		}
-		if order.Activation != nil && order.Activation.IsMock {
-			buttons = append(buttons, []Button{{Text: fmt.Sprintf("Показать eSIM #%d", index+1), Data: "esim:" + order.ID}})
-		}
+	for _, order := range orders {
+		fmt.Fprintf(&text, "\n\n%s\n%s\nЗаказ: %s\nСтатус: %s", countryTitle(order.Quote.Selection.CountryCode), selectionLabel(order.Quote.Selection), publicOrderID(order.ID), orderStatusLabel(order))
+		buttons = append(buttons, []Button{{Text: "Открыть " + publicOrderID(order.ID), Data: "details:" + order.ID}})
 	}
+	buttons = append(buttons, []Button{{Text: "Купить ещё eSIM", Data: "buy"}})
 	buttons = append(buttons, []Button{{Text: "В меню", Data: "menu"}})
 	return Response{Text: text.String(), Buttons: buttons}, nil
 }
 
+func selectionLabel(selection sim.Selection) string {
+	if selection.TotalDataMB > 0 {
+		return fmt.Sprintf("%s · %d дней", formatData(selection.TotalDataMB), selection.DurationDays)
+	}
+	if selection.PackageName != "" {
+		return selection.PackageName
+	}
+	if selection.GigabytesPerDay > 0 {
+		return fmt.Sprintf("%d ГБ/день · %d дней", selection.GigabytesPerDay, selection.DurationDays)
+	}
+	return "Пакет интернета"
+}
+
+func publicOrderID(orderID string) string {
+	value := strings.TrimPrefix(orderID, "o_")
+	if len(value) > 6 {
+		value = value[:6]
+	}
+	if value == "" {
+		return "#—"
+	}
+	return "#" + strings.ToUpper(value)
+}
+
+func orderStatusLabel(order sim.Order) string {
+	switch {
+	case order.OrderStatus == "completed" || order.DeliveryStatus == "sent":
+		return "Инструкция отправлена"
+	case order.OrderStatus == "refund_required":
+		return "Требуется проверка возврата"
+	case order.OrderStatus == "refund_pending":
+		return "Возврат оформляется"
+	case order.OrderStatus == "manual_review" || order.FulfillmentStatus == "manual_review":
+		return "Требуется проверка"
+	case order.Activation != nil || order.OrderStatus == "ready" || order.FulfillmentStatus == "provisioned":
+		return "eSIM готова"
+	case order.PaymentStatus == "succeeded":
+		return "Готовим eSIM"
+	case order.PaymentStatus == "pending" || order.OrderStatus == "awaiting_payment":
+		return "Ожидает оплаты"
+	default:
+		return "Обрабатывается"
+	}
+}
+
 func normalizeInput(input string) string {
 	input = strings.TrimSpace(input)
+	labels := map[string]string{
+		"🏠 Главное меню":      "menu",
+		"🌍 Купить eSIM":       "buy",
+		"📱 Мои eSIM":          "my",
+		"ℹ️ Как это работает": "how",
+		"✅ Совместимость":     "compatibility",
+		"❓ Вопросы и ответы":  "faq",
+		"🛟 Поддержка":         "support",
+	}
+	if action := labels[input]; action != "" {
+		return action
+	}
 	if !strings.HasPrefix(input, "/") {
 		return input
 	}

@@ -85,10 +85,13 @@ func (f *fakeClient) Order(context.Context, string, int64) (sim.Order, error) {
 
 func readyOrder() sim.Order {
 	return sim.Order{
-		ID:          "o_1",
-		OrderStatus: "completed",
-		Quote:       sim.Quote{Selection: sim.Selection{CountryCode: "TR", DurationDays: 7, GigabytesPerDay: 2}},
-		Activation:  &sim.ActivationData{SMAddress: "mock.invalid", ActivationCode: "MOCK", ManualCode: "LPA:1$mock.invalid$MOCK", IsMock: true},
+		ID:                "o_1234567890",
+		OrderStatus:       "completed",
+		PaymentStatus:     "succeeded",
+		FulfillmentStatus: "provisioned",
+		DeliveryStatus:    "sent",
+		Quote:             sim.Quote{Selection: sim.Selection{CountryCode: "TR", PackageName: "20 GB / 30 days", TotalDataMB: 20 * 1024, DurationDays: 30}},
+		Activation:        &sim.ActivationData{SMAddress: "mock.invalid", ActivationCode: "MOCK", ManualCode: "LPA:1$mock.invalid$MOCK", IsMock: true},
 	}
 }
 
@@ -102,10 +105,11 @@ func TestEngineCountryPackageFlow(t *testing.T) {
 		t.Fatalf("country menu = %+v, err = %v", response, err)
 	}
 	response, err = engine.Handle(ctx, 42, "country:TR")
-	if err != nil || len(response.Buttons) != 3 || response.Buttons[0][0].Data != "package:keepgo:29:data:20480:30" {
+	if err != nil || len(response.Buttons) != 3 || response.Buttons[0][0].Data != "package:TR|keepgo:29:data:20480:30" {
 		t.Fatalf("package menu = %+v, err = %v", response, err)
 	}
-	response, err = engine.Handle(ctx, 42, "package:keepgo:29:data:20480:30")
+	engine = NewEngine(client)
+	response, err = engine.Handle(ctx, 42, "package:TR|keepgo:29:data:20480:30")
 	if err != nil || client.selection.CountryCode != "TR" || client.selection.PackageID != "keepgo:29:data:20480:30" {
 		t.Fatalf("selection = %+v, response = %+v, err = %v", client.selection, response, err)
 	}
@@ -141,9 +145,15 @@ func TestEngineProvidesProductHelpAndCompatibility(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, callback := range []string{"buy", "my", "how", "compatibility", "faq", "support"} {
-		if !hasCallback(menu, callback) {
-			t.Fatalf("main menu does not contain %q: %+v", callback, menu.Buttons)
+	for _, label := range []string{"🏠 Главное меню", "🌍 Купить eSIM", "📱 Мои eSIM", "ℹ️ Как это работает", "✅ Совместимость", "❓ Вопросы и ответы", "🛟 Поддержка"} {
+		if !hasReplyLabel(menu, label) {
+			t.Fatalf("main menu does not contain %q: %+v", label, menu.ReplyKeyboard)
+		}
+	}
+	for input, expected := range map[string]string{"🏠 Главное меню": "TIMON SIM", "🌍 Купить eSIM": "Куда вы едете?", "📱 Мои eSIM": "У вас пока нет", "ℹ️ Как это работает": "Как работает", "✅ Совместимость": "Проверка совместимости", "❓ Вопросы и ответы": "Частые вопросы", "🛟 Поддержка": "закрытый тест"} {
+		response, err := engine.Handle(ctx, 42, input)
+		if err != nil || !strings.Contains(response.Text, expected) {
+			t.Fatalf("Handle(%q) response = %+v, err = %v", input, response, err)
 		}
 	}
 
@@ -153,6 +163,17 @@ func TestEngineProvidesProductHelpAndCompatibility(t *testing.T) {
 			t.Fatalf("Handle(%q) response = %+v, err = %v", input, response, err)
 		}
 	}
+}
+
+func hasReplyLabel(response Response, label string) bool {
+	for _, row := range response.ReplyKeyboard {
+		for _, value := range row {
+			if value == label {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func hasCallback(response Response, callback string) bool {
@@ -175,13 +196,19 @@ func TestEngineReturnsQRCodeAndInstallationInstructions(t *testing.T) {
 	if _, err := png.Decode(bytes.NewReader(response.Photo)); err != nil {
 		t.Fatalf("response photo is not PNG: %v", err)
 	}
-	for _, fragment := range []string{"iPhone", "Android", "SM-DP+", "LPA:1$mock.invalid$MOCK"} {
+	for _, fragment := range []string{"eSIM для", "Заказ #123456", "тестовый QR"} {
 		if !strings.Contains(response.Text, fragment) {
 			t.Fatalf("response text does not contain %q: %q", fragment, response.Text)
 		}
 	}
-	if response.DeliveredOrderID != "o_1" {
+	if response.DeliveredOrderID != "o_1234567890" {
 		t.Fatalf("delivered order ID = %q", response.DeliveredOrderID)
+	}
+	for input, fragment := range map[string]string{"guide-ios:o_1234567890": "Установка на iPhone", "guide-android:o_1234567890": "Установка на Android", "guide-manual:o_1234567890": "LPA:1$mock.invalid$MOCK"} {
+		guide, err := engine.Handle(context.Background(), 42, input)
+		if err != nil || !strings.Contains(guide.Text, fragment) {
+			t.Fatalf("Handle(%q) response = %+v, err = %v", input, guide, err)
+		}
 	}
 }
 
@@ -192,10 +219,17 @@ func TestMyESIMsAllowsRepeatedActivationDisplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("my response error = %v", err)
 	}
-	if len(response.Buttons) < 1 || response.Buttons[0][0].Data != "esim:o_1" {
+	if !strings.Contains(response.Text, "Заказ: #123456") || !strings.Contains(response.Text, "Статус: Инструкция отправлена") {
+		t.Fatalf("my response text = %q", response.Text)
+	}
+	if len(response.Buttons) < 1 || response.Buttons[0][0].Data != "details:o_1234567890" {
 		t.Fatalf("my response buttons = %+v", response.Buttons)
 	}
-	repeated, err := engine.Handle(context.Background(), 42, "esim:o_1")
+	details, err := engine.Handle(context.Background(), 42, "details:o_1234567890")
+	if err != nil || !strings.Contains(details.Text, "Инструкция отправлена") || !hasCallback(details, "esim:o_1234567890") {
+		t.Fatalf("details response = %+v, error = %v", details, err)
+	}
+	repeated, err := engine.Handle(context.Background(), 42, "esim:o_1234567890")
 	if err != nil || len(repeated.Photo) == 0 {
 		t.Fatalf("repeat response = %+v, error = %v", repeated, err)
 	}

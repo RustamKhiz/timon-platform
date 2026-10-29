@@ -131,7 +131,8 @@ func (t *Telegram) handleUpdate(ctx context.Context, update telegramUpdate) erro
 
 	response, err := t.engine.Handle(ctx, userID, input)
 	if err != nil {
-		return t.send(ctx, chatID, Response{Text: "Не удалось выполнить действие: " + err.Error(), Buttons: [][]Button{{{Text: "В меню", Data: "menu"}}}})
+		t.logger.Error("bot action failed", "input_kind", inputKind(input), "error", err)
+		return t.send(ctx, chatID, safeErrorResponse(input))
 	}
 	if err := t.send(ctx, chatID, response); err != nil {
 		return err
@@ -154,7 +155,17 @@ func (t *Telegram) send(ctx context.Context, chatID int64, response Response) er
 		keyboard = append(keyboard, telegramRow)
 	}
 	replyMarkup := map[string]any{}
-	if len(keyboard) > 0 {
+	if len(response.ReplyKeyboard) > 0 {
+		replyRows := make([][]map[string]string, 0, len(response.ReplyKeyboard))
+		for _, row := range response.ReplyKeyboard {
+			replyRow := make([]map[string]string, 0, len(row))
+			for _, label := range row {
+				replyRow = append(replyRow, map[string]string{"text": label})
+			}
+			replyRows = append(replyRows, replyRow)
+		}
+		replyMarkup = map[string]any{"keyboard": replyRows, "resize_keyboard": true, "is_persistent": true}
+	} else if len(keyboard) > 0 {
 		replyMarkup = map[string]any{"inline_keyboard": keyboard}
 	}
 	if len(response.Photo) > 0 {
@@ -165,6 +176,44 @@ func (t *Telegram) send(ctx context.Context, chatID int64, response Response) er
 		payload["reply_markup"] = replyMarkup
 	}
 	return t.call(ctx, "sendMessage", payload, nil)
+}
+
+func safeErrorResponse(input string) Response {
+	buttons := [][]Button{}
+	if retryableInput(input) && len(input) <= 64 {
+		buttons = append(buttons, []Button{{Text: "Повторить", Data: input}})
+	}
+	buttons = append(buttons, []Button{{Text: "В меню", Data: "menu"}})
+	buttons = append(buttons, []Button{{Text: "Поддержка", Data: "support"}})
+	return Response{Text: "Не удалось выполнить действие. Попробуйте ещё раз через несколько секунд. Если ошибка повторяется, обратитесь в поддержку.", Buttons: buttons}
+}
+
+func retryableInput(input string) bool {
+	if input == "buy" || input == "my" {
+		return true
+	}
+	prefixes := []string{"country:", "package:", "compat:", "confirm:", "pay:", "esim:", "details:", "guide-manual:"}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(input, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func inputKind(input string) string {
+	if separator := strings.IndexByte(input, ':'); separator > 0 {
+		return input[:separator]
+	}
+	if strings.HasPrefix(input, "/") {
+		return "command"
+	}
+	switch input {
+	case "buy", "my", "menu", "support", "faq", "how", "compatibility":
+		return input
+	default:
+		return "text"
+	}
 }
 
 func (t *Telegram) sendPhoto(ctx context.Context, chatID int64, response Response, replyMarkup map[string]any) error {
