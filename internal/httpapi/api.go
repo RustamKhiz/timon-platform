@@ -210,7 +210,10 @@ func (a *API) adminSession(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *API) adminOrders(w http.ResponseWriter, r *http.Request) {
-	orders, err := a.service.AdminOrders(r.Context())
+	orders, err := a.service.AdminOrders(r.Context(), sim.AdminOrderFilter{
+		Query: r.URL.Query().Get("q"), Status: r.URL.Query().Get("status"),
+		CountryCode: r.URL.Query().Get("country_code"),
+	})
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -275,6 +278,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	} else if errors.Is(err, sim.ErrIdempotencyConflict) {
 		status = http.StatusConflict
 	} else if errors.Is(err, sim.ErrIdempotencyRequired) {
+		status = http.StatusBadRequest
+	} else if errors.Is(err, sim.ErrInvalidAdminFilter) {
 		status = http.StatusBadRequest
 	}
 	writeError(w, status, err)

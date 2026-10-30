@@ -116,6 +116,58 @@ func TestExpiredQuoteCannotBecomeOrder(t *testing.T) {
 	}
 }
 
+func TestAdminOrdersFiltersByQueryStatusAndCountry(t *testing.T) {
+	service := NewService(PricingConfig{FixedMarkupRUB: 100})
+	ctx := context.Background()
+	trQuote, err := service.CreateQuote(ctx, Selection{CountryCode: "TR", DurationDays: 5, GigabytesPerDay: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	trOrder, err := service.CreateOrder(ctx, trQuote.ID, 123456789, "tr-order")
+	if err != nil {
+		t.Fatal(err)
+	}
+	aeQuote, err := service.CreateQuote(ctx, Selection{CountryCode: "AE", DurationDays: 7, GigabytesPerDay: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aeOrder, err := service.CreateOrder(ctx, aeQuote.ID, 987654321, "ae-order")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.MockPayAndProvision(ctx, aeOrder.ID, aeOrder.TelegramUserID); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name   string
+		filter AdminOrderFilter
+		wantID string
+	}{
+		{name: "telegram user", filter: AdminOrderFilter{Query: "123456"}, wantID: trOrder.ID},
+		{name: "short public id", filter: AdminOrderFilter{Query: "  #" + trOrder.ID[len(trOrder.ID)-8:] + "  "}, wantID: trOrder.ID},
+		{name: "status", filter: AdminOrderFilter{Status: "ready"}, wantID: aeOrder.ID},
+		{name: "country", filter: AdminOrderFilter{CountryCode: "tr"}, wantID: trOrder.ID},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			orders, err := service.AdminOrders(ctx, tt.filter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(orders) != 1 || orders[0].ID != tt.wantID {
+				t.Fatalf("AdminOrders(%+v) = %+v, want %s", tt.filter, orders, tt.wantID)
+			}
+		})
+	}
+	if _, err := service.AdminOrders(ctx, AdminOrderFilter{Status: "unknown"}); !errors.Is(err, ErrInvalidAdminFilter) {
+		t.Fatalf("invalid status error = %v, want ErrInvalidAdminFilter", err)
+	}
+	if _, err := service.AdminOrders(ctx, AdminOrderFilter{CountryCode: "US"}); !errors.Is(err, ErrInvalidAdminFilter) {
+		t.Fatalf("invalid country error = %v, want ErrInvalidAdminFilter", err)
+	}
+}
+
 func TestProviderPackagePricingRaisesMarkupToProtectMinimumMargin(t *testing.T) {
 	pkg := Package{ID: "keepgo:228:data:20480:30", CountryCode: "IN", Name: "20 GB / 30 days", DataMB: 20480, ValidityDays: 30, ProviderID: "keepgo-sandbox", ProviderBundleID: 228, ProviderPriceUSDCents: 3259, FXRateRUBPerUSD: 84.5572, ProviderRateVersion: "snapshot"}
 	service := NewServiceWithCatalog(PricingConfig{FixedMarkupRUB: 100, ExpectedFeeBPS: 350, MinimumMargin: 50}, nil, fakeCatalog{packages: []Package{pkg}})

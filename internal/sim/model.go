@@ -72,3 +72,9 @@ type Order struct {
 	PaidAt                *time.Time      `json:"paid_at,omitempty"`
 	FulfillmentDeadlineAt *time.Time      `json:"fulfillment_deadline_at,omitempty"`
 }
+
+type AdminOrderFilter struct {
+	Query       string
+	Status      string
+	CountryCode string
+}

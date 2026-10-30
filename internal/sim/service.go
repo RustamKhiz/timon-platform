@@ -20,6 +20,7 @@ var (
 	ErrIdempotencyRequired = errors.New("idempotency key is required")
 	ErrIdempotencyConflict = errors.New("idempotency key conflict")
 	ErrForbidden           = errors.New("order does not belong to user")
+	ErrInvalidAdminFilter  = errors.New("invalid admin order filter")
 )
 
 const mockProviderID = "mock-provider"
@@ -51,7 +52,7 @@ type Repository interface {
 	GetOrder(context.Context, string, int64) (Order, error)
 	OrdersForUser(context.Context, int64) ([]Order, error)
 	AdminOrder(context.Context, string) (Order, error)
-	AdminOrders(context.Context) ([]Order, error)
+	AdminOrders(context.Context, AdminOrderFilter) ([]Order, error)
 }
 
 type Service struct {
@@ -314,8 +315,15 @@ func (s *Service) AdminOrder(ctx context.Context, orderID string) (Order, error)
 	return s.store.AdminOrder(ctx, orderID)
 }
 
-func (s *Service) AdminOrders(ctx context.Context) ([]Order, error) {
-	return s.store.AdminOrders(ctx)
+func (s *Service) AdminOrders(ctx context.Context, filter AdminOrderFilter) ([]Order, error) {
+	filter.Query = strings.TrimPrefix(strings.TrimSpace(filter.Query), "#")
+	filter.Status = strings.TrimSpace(filter.Status)
+	filter.CountryCode = strings.ToUpper(strings.TrimSpace(filter.CountryCode))
+	if len(filter.Query) > 64 || !validAdminOrderStatus(filter.Status) ||
+		(filter.CountryCode != "" && !s.validCountry(filter.CountryCode)) {
+		return nil, ErrInvalidAdminFilter
+	}
+	return s.store.AdminOrders(ctx, filter)
 }
 
 func (s *memoryStore) SaveQuote(ctx context.Context, quote Quote) error {
@@ -449,7 +457,7 @@ func (s *memoryStore) AdminOrder(ctx context.Context, orderID string) (Order, er
 	return order, nil
 }
 
-func (s *memoryStore) AdminOrders(ctx context.Context) ([]Order, error) {
+func (s *memoryStore) AdminOrders(ctx context.Context, filter AdminOrderFilter) ([]Order, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -457,10 +465,41 @@ func (s *memoryStore) AdminOrders(ctx context.Context) ([]Order, error) {
 	defer s.mu.RUnlock()
 	orders := make([]Order, 0, len(s.orders))
 	for _, order := range s.orders {
-		orders = append(orders, order)
+		if matchesAdminOrder(order, filter) {
+			orders = append(orders, order)
+		}
 	}
 	sort.Slice(orders, func(i, j int) bool { return orders[i].CreatedAt.After(orders[j].CreatedAt) })
+	if len(orders) > 100 {
+		orders = orders[:100]
+	}
 	return orders, nil
+}
+
+func validAdminOrderStatus(status string) bool {
+	if status == "" {
+		return true
+	}
+	valid := map[string]struct{}{
+		"awaiting_payment": {}, "ready": {}, "completed": {}, "failed": {},
+		"manual_review": {}, "refund_required": {}, "refund_pending": {},
+	}
+	_, ok := valid[status]
+	return ok
+}
+
+func matchesAdminOrder(order Order, filter AdminOrderFilter) bool {
+	if filter.Query != "" {
+		query := strings.ToLower(filter.Query)
+		if !strings.Contains(strings.ToLower(order.ID), query) &&
+			!strings.Contains(fmt.Sprintf("%d", order.TelegramUserID), query) {
+			return false
+		}
+	}
+	if filter.Status != "" && order.OrderStatus != filter.Status {
+		return false
+	}
+	return filter.CountryCode == "" || order.Quote.Selection.CountryCode == filter.CountryCode
 }
 
 func (s *Service) validCountry(code string) bool {

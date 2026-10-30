@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/RustamKhiz/timon-platform/internal/sim"
@@ -232,8 +233,28 @@ func (s *Store) AdminOrder(ctx context.Context, orderID string) (sim.Order, erro
 	return queryOrder(ctx, s.pool, `WHERE o.id = $1`, orderID)
 }
 
-func (s *Store) AdminOrders(ctx context.Context) ([]sim.Order, error) {
-	rows, err := s.pool.Query(ctx, orderSelect+` ORDER BY o.created_at DESC`)
+func (s *Store) AdminOrders(ctx context.Context, filter sim.AdminOrderFilter) ([]sim.Order, error) {
+	conditions := make([]string, 0, 3)
+	args := make([]any, 0, 3)
+	add := func(condition string, value any) {
+		args = append(args, value)
+		conditions = append(conditions, fmt.Sprintf(condition, len(args)))
+	}
+	if filter.Query != "" {
+		add(`(STRPOS(LOWER(o.id), LOWER($%[1]d)) > 0 OR STRPOS(o.telegram_user_id::text, $%[1]d) > 0)`, filter.Query)
+	}
+	if filter.Status != "" {
+		add(`o.order_status = $%d`, filter.Status)
+	}
+	if filter.CountryCode != "" {
+		add(`o.country_code = $%d`, filter.CountryCode)
+	}
+	query := orderSelect
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += ` ORDER BY o.created_at DESC LIMIT 100`
+	rows, err := s.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list admin orders: %w", err)
 	}

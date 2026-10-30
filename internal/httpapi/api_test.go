@@ -165,6 +165,15 @@ func TestAdminAuthenticationAndReadOnlyOrders(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("authenticated admin status = %d", response.StatusCode)
 	}
+
+	invalidResponse, err := client.Get(server.URL + "/api/v1/admin/orders?status=unknown")
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidResponse.Body.Close()
+	if invalidResponse.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid admin filter status = %d", invalidResponse.StatusCode)
+	}
 }
 
 func postJSON(t *testing.T, endpoint string, body any, key string) *http.Response {
