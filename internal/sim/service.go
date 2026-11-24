@@ -38,6 +38,7 @@ type memoryStore struct {
 	quotes         map[string]Quote
 	orders         map[string]Order
 	idempotencyMap map[string]string
+	reviews        map[string]ManualReviewEvent
 }
 
 func idempotencyScope(telegramUserID int64, idempotencyKey string) string {
@@ -52,6 +53,7 @@ type Repository interface {
 	GetOrder(context.Context, string, int64) (Order, error)
 	OrdersForUser(context.Context, int64) ([]Order, error)
 	AdminOrder(context.Context, string) (Order, error)
+	RequestManualReview(context.Context, string, string, string, time.Time) (Order, error)
 	AdminOrders(context.Context, AdminOrderFilter) ([]Order, error)
 }
 
@@ -379,6 +381,9 @@ func (s *memoryStore) PayAndProvision(ctx context.Context, orderID string, teleg
 	if order.FulfillmentStatus == "provisioned" {
 		return order, nil
 	}
+	if order.OrderStatus == "manual_review" {
+		return Order{}, ErrReviewConflict
+	}
 	order.PaymentStatus = "succeeded"
 	order.PaidAt = &paidAt
 	order.FulfillmentDeadlineAt = &deadline
@@ -453,6 +458,9 @@ func (s *memoryStore) AdminOrder(ctx context.Context, orderID string) (Order, er
 	order, ok := s.orders[orderID]
 	if !ok {
 		return Order{}, ErrNotFound
+	}
+	if event, ok := s.reviews[orderID]; ok {
+		order.ManualReview = &event
 	}
 	return order, nil
 }

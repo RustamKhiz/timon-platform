@@ -133,6 +133,9 @@ func (s *Store) PayAndProvision(ctx context.Context, orderID string, telegramUse
 	if order.TelegramUserID != telegramUserID {
 		return sim.Order{}, sim.ErrForbidden
 	}
+	if order.OrderStatus == "manual_review" {
+		return sim.Order{}, sim.ErrReviewConflict
+	}
 	if order.FulfillmentStatus != "provisioned" {
 		_, err = tx.Exec(ctx, `
             UPDATE sim_orders
@@ -230,7 +233,11 @@ func (s *Store) OrdersForUser(ctx context.Context, telegramUserID int64) ([]sim.
 }
 
 func (s *Store) AdminOrder(ctx context.Context, orderID string) (sim.Order, error) {
-	return queryOrder(ctx, s.pool, `WHERE o.id = $1`, orderID)
+	order, err := queryOrder(ctx, s.pool, `WHERE o.id = $1`, orderID)
+	if err == nil && order.OrderStatus == "manual_review" {
+		order.ManualReview, err = loadManualReview(ctx, s.pool, orderID)
+	}
+	return order, err
 }
 
 func (s *Store) AdminOrders(ctx context.Context, filter sim.AdminOrderFilter) ([]sim.Order, error) {

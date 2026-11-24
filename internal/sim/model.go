@@ -60,17 +60,18 @@ type ActivationData struct {
 }
 
 type Order struct {
-	ID                    string          `json:"id"`
-	TelegramUserID        int64           `json:"telegram_user_id"`
-	Quote                 Quote           `json:"quote_snapshot"`
-	OrderStatus           string          `json:"order_status"`
-	PaymentStatus         string          `json:"payment_status"`
-	FulfillmentStatus     string          `json:"fulfillment_status"`
-	DeliveryStatus        string          `json:"delivery_status"`
-	Activation            *ActivationData `json:"activation,omitempty"`
-	CreatedAt             time.Time       `json:"created_at"`
-	PaidAt                *time.Time      `json:"paid_at,omitempty"`
-	FulfillmentDeadlineAt *time.Time      `json:"fulfillment_deadline_at,omitempty"`
+	ID                    string             `json:"id"`
+	TelegramUserID        int64              `json:"telegram_user_id"`
+	Quote                 Quote              `json:"quote_snapshot"`
+	OrderStatus           string             `json:"order_status"`
+	PaymentStatus         string             `json:"payment_status"`
+	FulfillmentStatus     string             `json:"fulfillment_status"`
+	DeliveryStatus        string             `json:"delivery_status"`
+	Activation            *ActivationData    `json:"activation,omitempty"`
+	ManualReview          *ManualReviewEvent `json:"manual_review,omitempty"`
+	CreatedAt             time.Time          `json:"created_at"`
+	PaidAt                *time.Time         `json:"paid_at,omitempty"`
+	FulfillmentDeadlineAt *time.Time         `json:"fulfillment_deadline_at,omitempty"`
 }
 
 type AdminOrderFilter struct {

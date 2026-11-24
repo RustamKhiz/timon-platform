@@ -68,6 +68,8 @@ func (m *Manager) Verify(token string, now time.Time) error {
 
 func (m *Manager) TTL() time.Duration { return m.ttl }
 
+func (m *Manager) Username() string { return m.username }
+
 func (m *Manager) signature(payload string) string {
 	mac := hmac.New(sha256.New, m.secret)
 	_, _ = mac.Write([]byte(payload))

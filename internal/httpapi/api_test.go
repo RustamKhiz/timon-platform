@@ -2,12 +2,14 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -117,7 +119,7 @@ func TestBotAuthentication(t *testing.T) {
 	}
 }
 
-func TestAdminAuthenticationAndReadOnlyOrders(t *testing.T) {
+func TestAdminAuthenticationAndOrders(t *testing.T) {
 	hash, err := bcrypt.GenerateFromPassword([]byte("admin-password"), bcrypt.MinCost)
 	if err != nil {
 		t.Fatal(err)
@@ -173,6 +175,53 @@ func TestAdminAuthenticationAndReadOnlyOrders(t *testing.T) {
 	invalidResponse.Body.Close()
 	if invalidResponse.StatusCode != http.StatusBadRequest {
 		t.Fatalf("invalid admin filter status = %d", invalidResponse.StatusCode)
+	}
+
+	ctx := context.Background()
+	quote, err := service.CreateQuote(ctx, sim.Selection{CountryCode: "TR", DurationDays: 3, GigabytesPerDay: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	order, err := service.CreateOrder(ctx, quote.ID, 42, "manual-review-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := server.URL + "/api/v1/admin/orders/" + order.ID + "/manual-review"
+	for _, tc := range []struct {
+		client      *http.Client
+		contentType string
+		reason      string
+		want        int
+	}{
+		{http.DefaultClient, "application/json", "payment_check", http.StatusUnauthorized},
+		{client, "text/plain", "payment_check", http.StatusUnsupportedMediaType},
+		{client, "application/json", "", http.StatusBadRequest},
+		{client, "application/json", "payment_check", http.StatusOK},
+		{client, "application/json", "payment_check", http.StatusOK},
+		{client, "application/json", "support_request", http.StatusConflict},
+	} {
+		res, err := tc.client.Post(endpoint, tc.contentType, strings.NewReader(`{"reason":"`+tc.reason+`"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != tc.want {
+			t.Fatalf("review %q: status = %d, want %d", tc.reason, res.StatusCode, tc.want)
+		}
+	}
+	detail, err := client.Get(server.URL + "/api/v1/admin/orders/" + order.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reviewed sim.Order
+	decodeResponse(t, detail, &reviewed)
+	if reviewed.OrderStatus != "manual_review" || reviewed.ManualReview == nil ||
+		reviewed.ManualReview.Actor != "owner" || reviewed.ManualReview.Reason != "payment_check" {
+		t.Fatalf("reviewed order = %+v", reviewed)
+	}
+	userOrder, err := service.GetOrder(ctx, order.ID, 42)
+	if err != nil || userOrder.ManualReview != nil {
+		t.Fatalf("user order contains audit data or failed: %+v, %v", userOrder, err)
 	}
 }
 

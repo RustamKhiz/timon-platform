@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"os"
 	"testing"
 
@@ -68,5 +69,24 @@ func TestPostgresRestartAndIdempotency(t *testing.T) {
 	}
 	if outboxState != "pending" {
 		t.Fatalf("outbox state = %q, want pending", outboxState)
+	}
+
+	if _, err := firstService.RequestManualReview(ctx, firstOrder.ID, "owner", "payment_check"); !errors.Is(err, sim.ErrReviewConflict) {
+		t.Fatalf("review of a provisioned order = %v, want conflict", err)
+	}
+	reviewed, err := firstService.RequestManualReview(ctx, otherUserOrder.ID, "owner", "payment_check")
+	if err != nil || reviewed.OrderStatus != "manual_review" || reviewed.ManualReview == nil {
+		t.Fatalf("reviewed order = %+v, %v", reviewed, err)
+	}
+	retry, err := restartedService.RequestManualReview(ctx, otherUserOrder.ID, "owner", "payment_check")
+	if err != nil || retry.ManualReview == nil || *retry.ManualReview != *reviewed.ManualReview {
+		t.Fatalf("retried review = %+v, %v", retry, err)
+	}
+	detail, err := restartedService.AdminOrder(ctx, otherUserOrder.ID)
+	if err != nil || detail.ManualReview == nil || *detail.ManualReview != *reviewed.ManualReview {
+		t.Fatalf("persisted review = %+v, %v", detail, err)
+	}
+	if _, err := restartedService.MockPayAndProvision(ctx, otherUserOrder.ID, 43); !errors.Is(err, sim.ErrReviewConflict) {
+		t.Fatalf("mock payment during manual review = %v, want conflict", err)
 	}
 }

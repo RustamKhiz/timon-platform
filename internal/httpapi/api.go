@@ -52,6 +52,7 @@ func New(service *sim.Service, logger *slog.Logger, configs ...Config) http.Hand
 	mux.Handle("GET /api/v1/admin/session", api.requireAdmin(http.HandlerFunc(api.adminSession)))
 	mux.Handle("GET /api/v1/admin/orders", api.requireAdmin(http.HandlerFunc(api.adminOrders)))
 	mux.Handle("GET /api/v1/admin/orders/{id}", api.requireAdmin(http.HandlerFunc(api.adminOrder)))
+	mux.Handle("POST /api/v1/admin/orders/{id}/manual-review", api.requireAdmin(http.HandlerFunc(api.requestManualReview)))
 	return logging(logger, authenticate(config.BotToken, mux))
 }
 
@@ -227,7 +228,14 @@ func (a *API) adminOrder(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, order)
+	writeAdminOrder(w, order)
+}
+
+func writeAdminOrder(w http.ResponseWriter, order sim.Order) {
+	writeJSON(w, http.StatusOK, struct {
+		sim.Order
+		CanRequestManualReview bool `json:"can_request_manual_review"`
+	}{order, order.CanRequestManualReview()})
 }
 
 func (a *API) requireAdmin(next http.Handler) http.Handler {
@@ -275,7 +283,7 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	} else if errors.Is(err, sim.ErrForbidden) {
 		status = http.StatusForbidden
-	} else if errors.Is(err, sim.ErrIdempotencyConflict) {
+	} else if errors.Is(err, sim.ErrIdempotencyConflict) || errors.Is(err, sim.ErrReviewConflict) {
 		status = http.StatusConflict
 	} else if errors.Is(err, sim.ErrIdempotencyRequired) {
 		status = http.StatusBadRequest
