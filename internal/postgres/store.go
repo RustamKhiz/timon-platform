@@ -233,11 +233,19 @@ func (s *Store) OrdersForUser(ctx context.Context, telegramUserID int64) ([]sim.
 }
 
 func (s *Store) AdminOrder(ctx context.Context, orderID string) (sim.Order, error) {
-	order, err := queryOrder(ctx, s.pool, `WHERE o.id = $1`, orderID)
-	if err == nil && order.OrderStatus == "manual_review" {
-		order.ManualReview, err = loadManualReview(ctx, s.pool, orderID)
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return sim.Order{}, err
 	}
-	return order, err
+	defer tx.Rollback(ctx) //nolint:errcheck
+	order, err := queryOrder(ctx, tx, `WHERE o.id = $1`, orderID)
+	if err != nil {
+		return sim.Order{}, err
+	}
+	if err := readManualReviewHistory(ctx, tx, &order); err != nil {
+		return sim.Order{}, err
+	}
+	return order, readInstructionResends(ctx, tx, &order)
 }
 
 func (s *Store) AdminOrders(ctx context.Context, filter sim.AdminOrderFilter) ([]sim.Order, error) {

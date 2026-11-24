@@ -75,7 +75,7 @@ func TestTelegramSendPhotoUsesMultipartWithoutExposingToken(t *testing.T) {
 			}
 			gotContentType = request.Header.Get("Content-Type")
 			gotBody, _ = io.ReadAll(request.Body)
-			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(bytes.NewReader(nil))}, nil
+			return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Body: io.NopCloser(strings.NewReader(`{"ok":true}`))}, nil
 		})},
 	}
 

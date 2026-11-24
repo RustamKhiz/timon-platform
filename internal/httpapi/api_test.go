@@ -129,7 +129,7 @@ func TestAdminAuthenticationAndOrders(t *testing.T) {
 		t.Fatal(err)
 	}
 	service := sim.NewService(sim.PricingConfig{FixedMarkupRUB: 100})
-	server := httptest.NewServer(New(service, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{AdminAuth: manager}))
+	server := httptest.NewServer(New(service, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{AdminAuth: manager, BotToken: "test-bot-token"}))
 	defer server.Close()
 
 	response, err := http.Get(server.URL + "/api/v1/admin/orders")
@@ -222,6 +222,32 @@ func TestAdminAuthenticationAndOrders(t *testing.T) {
 	userOrder, err := service.GetOrder(ctx, order.ID, 42)
 	if err != nil || userOrder.ManualReview != nil {
 		t.Fatalf("user order contains audit data or failed: %+v, %v", userOrder, err)
+	}
+
+	for _, tc := range []struct {
+		client *http.Client
+		path   string
+		body   string
+		want   int
+	}{
+		{http.DefaultClient, "/api/v1/admin/orders/" + order.ID + "/release-review", "{}", http.StatusUnauthorized},
+		{http.DefaultClient, "/api/v1/admin/orders/" + order.ID + "/resend-instruction", "{}", http.StatusUnauthorized},
+		{client, "/api/v1/sim/instruction-deliveries/claim", "{}", http.StatusUnauthorized},
+		{client, "/api/v1/admin/orders/" + order.ID + "/release-review", `{"review_id":1}`, http.StatusNoContent},
+		{client, "/api/v1/admin/orders/" + order.ID + "/release-review", `{"review_id":1}`, http.StatusNoContent},
+	} {
+		res, err := tc.client.Post(server.URL+tc.path, "application/json", strings.NewReader(tc.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		if res.StatusCode != tc.want {
+			t.Fatalf("POST %s = %d, want %d", tc.path, res.StatusCode, tc.want)
+		}
+	}
+	userOrder, err = service.GetOrder(ctx, order.ID, 42)
+	if err != nil || userOrder.OrderStatus != "awaiting_payment" || len(userOrder.ManualReviews) != 0 {
+		t.Fatalf("released user order = %+v, %v", userOrder, err)
 	}
 }
 

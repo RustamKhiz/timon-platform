@@ -53,6 +53,12 @@ func New(service *sim.Service, logger *slog.Logger, configs ...Config) http.Hand
 	mux.Handle("GET /api/v1/admin/orders", api.requireAdmin(http.HandlerFunc(api.adminOrders)))
 	mux.Handle("GET /api/v1/admin/orders/{id}", api.requireAdmin(http.HandlerFunc(api.adminOrder)))
 	mux.Handle("POST /api/v1/admin/orders/{id}/manual-review", api.requireAdmin(http.HandlerFunc(api.requestManualReview)))
+	mux.Handle("POST /api/v1/admin/orders/{id}/release-review", api.requireAdmin(http.HandlerFunc(api.releaseManualReview)))
+	mux.Handle("POST /api/v1/admin/orders/{id}/resend-instruction", api.requireAdmin(http.HandlerFunc(api.queueInstructionResend)))
+	if config.BotToken != "" {
+		mux.HandleFunc("POST /api/v1/sim/instruction-deliveries/claim", api.claimInstructionResend)
+		mux.HandleFunc("POST /api/v1/sim/instruction-deliveries/{id}/finish", api.finishInstructionResend)
+	}
 	return logging(logger, authenticate(config.BotToken, mux))
 }
 
@@ -225,17 +231,22 @@ func (a *API) adminOrders(w http.ResponseWriter, r *http.Request) {
 func (a *API) adminOrder(w http.ResponseWriter, r *http.Request) {
 	order, err := a.service.AdminOrder(r.Context(), r.PathValue("id"))
 	if err != nil {
-		writeServiceError(w, err)
+		a.writeOrderActionResult(w, err)
 		return
 	}
-	writeAdminOrder(w, order)
+	a.writeAdminOrder(w, order)
 }
 
-func writeAdminOrder(w http.ResponseWriter, order sim.Order) {
+func (a *API) writeAdminOrder(w http.ResponseWriter, order sim.Order) {
 	writeJSON(w, http.StatusOK, struct {
 		sim.Order
 		CanRequestManualReview bool `json:"can_request_manual_review"`
-	}{order, order.CanRequestManualReview()})
+		CanReleaseManualReview bool `json:"can_release_manual_review"`
+		CanResendInstruction   bool `json:"can_resend_instruction"`
+	}{
+		order, order.CanRequestManualReview(), order.CanReleaseManualReview(),
+		a.config.BotToken != "" && a.service.SupportsInstructionResend() && order.CanResendInstruction(),
+	})
 }
 
 func (a *API) requireAdmin(next http.Handler) http.Handler {
@@ -306,7 +317,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func logging(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
-		if !strings.HasSuffix(r.URL.Path, "/healthz") {
+		if !strings.HasSuffix(r.URL.Path, "/healthz") && r.URL.Path != "/api/v1/sim/instruction-deliveries/claim" {
 			logger.Info("request", "method", r.Method, "path", r.URL.Path)
 		}
 	})

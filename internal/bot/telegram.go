@@ -58,6 +58,18 @@ func (t *Telegram) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("load Telegram offset: %w", err)
 	}
+	if t.client != nil && t.client.token != "" {
+		workerCtx, stopWorker := context.WithCancel(ctx)
+		workerDone := make(chan struct{})
+		go func() {
+			defer close(workerDone)
+			t.runInstructionResends(workerCtx)
+		}()
+		defer func() {
+			stopWorker()
+			<-workerDone
+		}()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -267,6 +279,12 @@ func (t *Telegram) sendPhoto(ctx context.Context, chatID int64, response Respons
 	defer telegramResponse.Body.Close()
 	if telegramResponse.StatusCode < 200 || telegramResponse.StatusCode >= 300 {
 		return fmt.Errorf("Telegram API sendPhoto returned %s", telegramResponse.Status)
+	}
+	var result struct {
+		OK bool `json:"ok"`
+	}
+	if err := json.NewDecoder(telegramResponse.Body).Decode(&result); err != nil || !result.OK {
+		return fmt.Errorf("Telegram API sendPhoto did not confirm delivery")
 	}
 	return nil
 }
