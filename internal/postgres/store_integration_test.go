@@ -123,6 +123,9 @@ func TestPostgresRestartAndIdempotency(t *testing.T) {
 	t.Run("instruction resends", func(t *testing.T) {
 		testInstructionResends(t, ctx, pool, firstService, restartedService, firstOrder.ID)
 	})
+	t.Run("Turkey Keepgo checkout and legacy daily quote", func(t *testing.T) {
+		testTurkeyCheckout(t, ctx, pool)
+	})
 }
 
 func testInstructionResends(t *testing.T, ctx context.Context, pool *pgxpool.Pool, service, restarted *sim.Service, orderID string) {
