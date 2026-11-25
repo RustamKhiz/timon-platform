@@ -133,7 +133,7 @@ func (s *Store) PayAndProvision(ctx context.Context, orderID string, telegramUse
 	if order.TelegramUserID != telegramUserID {
 		return sim.Order{}, sim.ErrForbidden
 	}
-	if order.OrderStatus == "manual_review" {
+	if order.OrderStatus == "manual_review" || order.FulfillmentStatus == "provisioning" {
 		return sim.Order{}, sim.ErrReviewConflict
 	}
 	if order.FulfillmentStatus != "provisioned" {
@@ -306,7 +306,8 @@ const orderSelect = `
            o.activation_manual_code, o.activation_is_mock, o.created_at,
            o.paid_at, o.fulfillment_deadline_at, o.package_id, o.package_name,
            o.total_data_mb, o.provider_bundle_id, o.provider_price_usd_cents,
-           o.fx_rate_rub_per_usd, o.applied_markup_rub
+           o.fx_rate_rub_per_usd, o.applied_markup_rub,
+           EXISTS (SELECT FROM sim_keepgo_sandbox_issuance i WHERE i.order_id = o.id AND i.sandbox_iccid IS NOT NULL)
       FROM sim_orders o`
 
 func queryOrder(ctx context.Context, db queryer, clause string, args ...any) (sim.Order, error) {
@@ -321,6 +322,7 @@ func scanOrder(row scanner) (sim.Order, error) {
 	var order sim.Order
 	var activationAddress, activationCode, activationManual pgtype.Text
 	var activationIsMock pgtype.Bool
+	var activationIsSandbox bool
 	var paidAt, deadline pgtype.Timestamptz
 	err := row.Scan(
 		&order.ID, &order.TelegramUserID, &order.Quote.ID, &order.Quote.ProviderID,
@@ -334,14 +336,14 @@ func scanOrder(row scanner) (sim.Order, error) {
 		&order.Quote.Selection.PackageID, &order.Quote.Selection.PackageName,
 		&order.Quote.Selection.TotalDataMB, &order.Quote.ProviderBundleID,
 		&order.Quote.ProviderPriceUSDCents, &order.Quote.FXRateRUBPerUSD,
-		&order.Quote.AppliedMarkupRUB)
+		&order.Quote.AppliedMarkupRUB, &activationIsSandbox)
 	if err != nil {
 		return sim.Order{}, fmt.Errorf("scan order: %w", err)
 	}
 	if activationAddress.Valid && activationCode.Valid && activationManual.Valid && activationIsMock.Valid {
 		order.Activation = &sim.ActivationData{
 			SMAddress: activationAddress.String, ActivationCode: activationCode.String,
-			ManualCode: activationManual.String, IsMock: activationIsMock.Bool,
+			ManualCode: activationManual.String, IsMock: activationIsMock.Bool, IsSandbox: activationIsSandbox,
 		}
 	}
 	if paidAt.Valid {

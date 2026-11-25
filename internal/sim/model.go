@@ -57,6 +57,11 @@ type ActivationData struct {
 	ActivationCode string `json:"activation_code"`
 	ManualCode     string `json:"manual_code"`
 	IsMock         bool   `json:"is_mock"`
+	IsSandbox      bool   `json:"is_sandbox,omitempty"`
+}
+
+func (a *ActivationData) IsTestProfile() bool {
+	return a != nil && (a.IsMock || a.IsSandbox)
 }
 
 type Order struct {

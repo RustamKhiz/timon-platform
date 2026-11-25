@@ -2,12 +2,14 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +22,10 @@ import (
 )
 
 type testCheckoutRate struct{}
+
+type checkoutRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f checkoutRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func (testCheckoutRate) USDToRUB(context.Context) (float64, string, error) {
 	return 100, "checkout-test-rate", nil
@@ -121,4 +127,70 @@ func testTurkeyCheckout(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 		}
 	}
 	t.Log("Turkey Keepgo fixture: 20 GB / 30 days shown at 1065 RUB; one unpaid order saved; legacy 2 GB/day remains 352 RUB")
+
+	var requests atomic.Int32
+	issuer, err := keepgo.NewClient(keepgo.Config{
+		APIKey: "fixture-key", AccessToken: "fixture-token",
+		HTTPClient: &http.Client{Transport: checkoutRoundTrip(func(r *http.Request) (*http.Response, error) {
+			attempt := requests.Add(1)
+			if r.URL.String() != keepgo.SandboxBaseURL+"/line/create" || r.Method != http.MethodPost {
+				return nil, errors.New("unexpected sandbox endpoint")
+			}
+			var body map[string]int
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				return nil, err
+			}
+			if body["bundle_id"] != 10 || body["refill_mb"] != 20480 || body["refill_days"] != 30 || body["count"] != 1 {
+				return nil, errors.New("unexpected sandbox bundle")
+			}
+			if attempt > 1 {
+				return nil, context.DeadlineExceeded
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(
+				`{"ack":"success","sim_card":{"iccid":"8900000000000000000","lpa_code":"LPA:1$sandbox.invalid$FIXTURE"}}`))}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	provisioning := sim.NewServiceWithCatalog(sim.PricingConfig{FixedMarkupRUB: 100}, NewStore(pool), catalog)
+	if err := provisioning.EnableSandboxIssuance(issuer); err != nil {
+		t.Fatal(err)
+	}
+	issuanceAPI := httptest.NewServer(httpapi.New(provisioning, slog.New(slog.NewTextHandler(io.Discard, nil)), httpapi.Config{BotToken: "checkout-test"}))
+	defer issuanceAPI.Close()
+	issuanceClient := bot.NewHTTPClient(issuanceAPI.URL, "checkout-test")
+	issuanceBot := bot.NewEngine(issuanceClient)
+	for i := 0; i < 2; i++ {
+		instruction, err := issuanceBot.Handle(ctx, buyer, "pay:"+order.ID)
+		if err != nil || len(instruction.Photo) == 0 || instruction.DeliveredOrderID != order.ID ||
+			!strings.Contains(instruction.Text, "KEEPGO SANDBOX") || len(instruction.Buttons) < 3 ||
+			instruction.Buttons[0][0].Text != "Инструкция для iPhone" || instruction.Buttons[1][0].Text != "Инструкция для Android" {
+			t.Fatalf("sandbox QR and instruction buttons missing, error: %v", err)
+		}
+	}
+	provisioned, err := issuanceClient.Order(ctx, order.ID, buyer)
+	if err != nil || provisioned.Activation == nil || !provisioned.Activation.IsSandbox || provisioned.Activation.IsMock || requests.Load() != 1 {
+		t.Fatalf("provider profile not saved or duplicate issue: requests=%d, error=%v", requests.Load(), err)
+	}
+	if err := issuanceClient.MarkDelivered(ctx, order.ID, buyer); err != nil {
+		t.Fatal(err)
+	}
+	delivered, err := issuanceClient.Order(ctx, order.ID, buyer)
+	if err != nil || delivered.DeliveryStatus != "sent" {
+		t.Fatalf("delivery not recorded: %v", err)
+	}
+	orderWithTimeout, err := issuanceClient.CreateOrder(ctx, order.Quote.ID, buyer, "keepgo-timeout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		result, err := issuanceClient.MockPay(ctx, orderWithTimeout.ID, buyer)
+		if err != nil || result.OrderStatus != "manual_review" || result.Activation != nil {
+			t.Fatalf("ambiguous issue did not go to review: %v", err)
+		}
+	}
+	if requests.Load() != 2 {
+		t.Fatalf("ambiguous issue was retried: %d requests", requests.Load())
+	}
 }

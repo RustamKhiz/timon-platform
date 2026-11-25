@@ -135,9 +135,8 @@ The check was completed successfully on 2026-10-22 against the dedicated local P
 ## Keepgo sandbox catalogue
 
 The standalone sandbox catalogue probe performs read-only requests for the
-account balance and bundles. The same read-only client can supply packages to
-`sim-api` when `SIM_PROVIDER_MODE=keepgo-sandbox`; neither path buys a line or
-deploys provider credentials.
+account balance and bundles. The same client supplies packages to
+`sim-api` when `SIM_PROVIDER_MODE=keepgo-sandbox`.
 
 Required process environment variables:
 
@@ -177,8 +176,19 @@ hours. `SIM_USD_RUB_RATE` is only an optional outage fallback and does not need
 daily manual updates. When the staging variable is absent, CI calculates and
 seals the buffered fallback automatically during deployment. Every quote
 snapshots the actual rate and source version.
-Sandbox catalogue mode remains paired with mock payment and mock fulfillment;
-it never calls Keepgo line-creation endpoints.
+Mock fulfillment is the default. Set `SIM_KEEPGO_SANDBOX_ISSUANCE_ENABLED=true`
+in the API process or staging environment to issue a single Keepgo Sandbox line
+per eligible order after mock payment. This requires PostgreSQL, migration
+`000006`, and `SIM_PROVIDER_MODE=keepgo-sandbox`. Deploy the API and bot together.
+Check that `/healthz` reports `keepgo-sandbox-fulfillment`, then use a fresh
+order in a private, allowlisted bot chat to check the QR and instructions.
+
+The issue request uses the bundle, volume, and duration from the saved quote.
+The attempt is recorded before calling Keepgo. A failed or ambiguous response
+goes to manual review, and an interrupted attempt is shown as requiring review
+on the next confirmation after one minute. The bot never automatically reissues
+the line. Disable the feature flag to roll back new issuance while retaining the
+attempt history. Keepgo Sandbox profiles cannot connect to a real network.
 
 `sim-api` warms the Keepgo catalogue before it starts listening. Once populated,
 an expired catalogue is served as stale data while a bounded background refresh

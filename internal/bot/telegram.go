@@ -134,6 +134,9 @@ func (t *Telegram) handleUpdate(ctx context.Context, update telegramUpdate) erro
 	} else {
 		return nil
 	}
+	if chatID != userID || userID <= 0 {
+		return nil
+	}
 	if _, allowed := t.allowedUserIDs[userID]; !allowed {
 		if update.Callback != nil {
 			_ = t.call(ctx, "answerCallbackQuery", map[string]any{"callback_query_id": update.Callback.ID}, nil)

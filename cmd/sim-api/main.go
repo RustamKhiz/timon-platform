@@ -58,6 +58,7 @@ func main() {
 		storageMode = "postgres"
 	}
 	var catalog sim.Catalog
+	var sandboxIssuer sim.SandboxIssuer
 	switch providerMode {
 	case "mock":
 	case "keepgo-sandbox":
@@ -85,11 +86,18 @@ func main() {
 			os.Exit(2)
 		}
 		catalog = keepgoCatalog
+		sandboxIssuer = client
 	default:
 		logger.Error("unsupported SIM_PROVIDER_MODE", "mode", providerMode)
 		os.Exit(2)
 	}
 	service := sim.NewServiceWithCatalog(pricing, repository, catalog)
+	if os.Getenv("SIM_KEEPGO_SANDBOX_ISSUANCE_ENABLED") == "true" {
+		if err := service.EnableSandboxIssuance(sandboxIssuer); err != nil {
+			logger.Error("Keepgo sandbox issuance requires PostgreSQL and Keepgo sandbox mode")
+			os.Exit(2)
+		}
+	}
 	var adminManager *adminauth.Manager
 	adminUsername := os.Getenv("SIM_ADMIN_USERNAME")
 	adminPasswordHash := os.Getenv("SIM_ADMIN_PASSWORD_BCRYPT")
@@ -129,7 +137,7 @@ func main() {
 			logger.Error("API graceful shutdown failed", "error", err)
 		}
 	}()
-	logger.Info("TIMON SIM API starting", "address", address, "markup_rub", markup, "storage", storageMode, "provider_mode", providerMode, "fulfillment", "mock")
+	logger.Info("TIMON SIM API starting", "address", address, "markup_rub", markup, "storage", storageMode, "provider_mode", providerMode, "keepgo_sandbox_issuance", service.SandboxIssuanceEnabled())
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Error("server stopped", "error", err)
 		os.Exit(1)

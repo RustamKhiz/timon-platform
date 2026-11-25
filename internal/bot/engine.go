@@ -345,6 +345,12 @@ func (e *Engine) mockPay(ctx context.Context, userID int64, orderID string) (Res
 	if err != nil {
 		return Response{}, err
 	}
+	if order.Activation == nil {
+		return Response{
+			Text:    "ТЕСТ / SANDBOX\n\n" + orderStatusLabel(order),
+			Buttons: [][]Button{{{Text: "Открыть заказ", Data: "details:" + order.ID}}, {{Text: "Мои eSIM", Data: "my"}}},
+		}, nil
+	}
 	return activationResponse(order)
 }
 
@@ -358,14 +364,18 @@ func (e *Engine) esimDetails(ctx context.Context, userID int64, orderID string) 
 
 func activationResponse(order sim.Order) (Response, error) {
 	activation := order.Activation
-	if activation == nil || !activation.IsMock {
+	if !activation.IsTestProfile() {
 		return Response{}, errorsNew("тестовая eSIM ещё не готова")
 	}
 	png, err := qrcode.Encode(activation.ManualCode, qrcode.Medium, 512)
 	if err != nil {
-		return Response{}, fmt.Errorf("generate mock activation QR: %w", err)
+		return Response{}, errorsNew("не удалось создать тестовый QR")
 	}
-	text := fmt.Sprintf("ТЕСТ / MOCK\n\n✅ eSIM для %s готова\nЗаказ %s\n\nОтсканируйте QR-код в настройках телефона. Этот тестовый QR не работает в реальной сети. Не удаляйте установленную eSIM до окончания поездки.", countryTitle(order.Quote.Selection.CountryCode), publicOrderID(order.ID))
+	label, filename := "ТЕСТ / MOCK", "timon-sim-mock-qr.png"
+	if activation.IsSandbox {
+		label, filename = "ТЕСТ / KEEPGO SANDBOX", "timon-sim-sandbox-qr.png"
+	}
+	text := fmt.Sprintf("%s\n\n✅ eSIM для %s готова\nЗаказ %s\n\nОтсканируйте QR-код в настройках телефона. Этот тестовый QR не работает в реальной сети. Не удаляйте установленную eSIM до окончания поездки.", label, countryTitle(order.Quote.Selection.CountryCode), publicOrderID(order.ID))
 	return Response{
 		Text: text,
 		Buttons: [][]Button{
@@ -377,7 +387,7 @@ func activationResponse(order sim.Order) (Response, error) {
 			{{Text: "В меню", Data: "menu"}},
 		},
 		Photo:            png,
-		PhotoFilename:    "timon-sim-mock-qr.png",
+		PhotoFilename:    filename,
 		DeliveredOrderID: order.ID,
 	}, nil
 }
@@ -390,10 +400,10 @@ func (e *Engine) orderDetails(ctx context.Context, userID int64, orderID string)
 	selection := order.Quote.Selection
 	text := fmt.Sprintf("ТЕСТ / MOCK\n\n%s\n%s\nЗаказ: %s\nСтатус: %s", countryTitle(selection.CountryCode), selectionLabel(selection), publicOrderID(order.ID), orderStatusLabel(order))
 	buttons := make([][]Button, 0, 8)
-	if order.PaymentStatus == "pending" || order.OrderStatus == "awaiting_payment" {
+	if order.OrderStatus == "awaiting_payment" || order.FulfillmentStatus == "provisioning" {
 		buttons = append(buttons, []Button{{Text: "Подтвердить mock-оплату", Data: "pay:" + order.ID}})
 	}
-	if order.Activation != nil && order.Activation.IsMock {
+	if order.Activation.IsTestProfile() {
 		buttons = append(buttons, []Button{{Text: "Показать QR-код", Data: "esim:" + order.ID}})
 		buttons = append(buttons, []Button{{Text: "Инструкция для iPhone", Data: "guide-ios:" + order.ID}})
 		buttons = append(buttons, []Button{{Text: "Инструкция для Android", Data: "guide-android:" + order.ID}})
@@ -419,10 +429,14 @@ func (e *Engine) manualInstallation(ctx context.Context, userID int64, orderID s
 		return Response{}, err
 	}
 	activation := order.Activation
-	if activation == nil || !activation.IsMock {
+	if !activation.IsTestProfile() {
 		return Response{}, errorsNew("тестовая eSIM ещё не готова")
 	}
-	text := fmt.Sprintf("ТЕСТ / MOCK\n\nРучная установка\nЗаказ: %s\n\nSM-DP+: %s\nКод активации: %s\nLPA: %s\n\nНе пересылайте эти данные другим людям. Текущие значения синтетические и не работают в реальной сети.", publicOrderID(order.ID), activation.SMAddress, activation.ActivationCode, activation.ManualCode)
+	label := "ТЕСТ / MOCK"
+	if activation.IsSandbox {
+		label = "ТЕСТ / KEEPGO SANDBOX"
+	}
+	text := fmt.Sprintf("%s\n\nРучная установка\nЗаказ: %s\n\nSM-DP+: %s\nКод активации: %s\nLPA: %s\n\nНе пересылайте эти данные другим людям. Тестовая eSIM не работает в реальной сети.", label, publicOrderID(order.ID), activation.SMAddress, activation.ActivationCode, activation.ManualCode)
 	return Response{Text: text, Buttons: [][]Button{{{Text: "Показать QR-код", Data: "esim:" + order.ID}}, {{Text: "Открыть заказ", Data: "details:" + order.ID}}, {{Text: "В меню", Data: "menu"}}}}, nil
 }
 

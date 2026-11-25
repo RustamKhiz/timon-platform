@@ -63,6 +63,7 @@ type Service struct {
 	pricing PricingConfig
 	store   Repository
 	catalog Catalog
+	sandbox SandboxIssuer
 }
 
 func NewService(pricing PricingConfig) *Service {

@@ -3,9 +3,9 @@
 `timon-platform` is an independent Git repository for new TIMON products. It is not part of a monorepo.
 
 Current implementation scope is the TIMON SIM sandbox vertical slice and its closed,
-allowlisted staging deployment. Read-only Keepgo sandbox catalogue access is approved.
-Provider line creation, real provider purchases, real payments and public production
-access remain out of scope until separately approved.
+allowlisted staging deployment. Keepgo Sandbox catalogue access and test line
+issuance are approved. Real provider purchases, real payments and public
+production access remain out of scope until separately approved.
 
 - Keep `sim-api` and `sim-bot` as separate commands and runtimes.
 - Do not import TIMON VPN code or connect to VPN databases, payment tables, secrets, bots, or deployment.

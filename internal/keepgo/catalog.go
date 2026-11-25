@@ -12,7 +12,7 @@ import (
 	"github.com/RustamKhiz/timon-platform/internal/sim"
 )
 
-const sandboxProviderID = "keepgo-sandbox"
+const sandboxProviderID = sim.KeepgoSandboxProviderID
 
 var countryNames = map[string]string{
 	"TR": "Turkey",

@@ -67,7 +67,11 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 	if providerMode == "" {
 		providerMode = "mock"
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": "mock-fulfillment", "provider": providerMode, "storage": a.config.StorageMode})
+	mode := "mock-fulfillment"
+	if a.service.SandboxIssuanceEnabled() {
+		mode = "keepgo-sandbox-fulfillment"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "mode": mode, "provider": providerMode, "storage": a.config.StorageMode})
 }
 
 func (a *API) countries(w http.ResponseWriter, _ *http.Request) {
@@ -154,7 +158,7 @@ func (a *API) mockPayment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	order, err := a.service.MockPayAndProvision(r.Context(), r.PathValue("id"), userID)
+	order, err := a.service.ConfirmTestPayment(r.Context(), r.PathValue("id"), userID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -225,6 +229,9 @@ func (a *API) adminOrders(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
+	for i := range orders {
+		hideSandboxActivation(&orders[i])
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"orders": orders})
 }
 
@@ -238,6 +245,7 @@ func (a *API) adminOrder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) writeAdminOrder(w http.ResponseWriter, order sim.Order) {
+	hideSandboxActivation(&order)
 	writeJSON(w, http.StatusOK, struct {
 		sim.Order
 		CanRequestManualReview bool `json:"can_request_manual_review"`
@@ -247,6 +255,12 @@ func (a *API) writeAdminOrder(w http.ResponseWriter, order sim.Order) {
 		order, order.CanRequestManualReview(), order.CanReleaseManualReview(),
 		a.config.BotToken != "" && a.service.SupportsInstructionResend() && order.CanResendInstruction(),
 	})
+}
+
+func hideSandboxActivation(order *sim.Order) {
+	if order.Activation != nil && order.Activation.IsSandbox {
+		order.Activation = nil
+	}
 }
 
 func (a *API) requireAdmin(next http.Handler) http.Handler {
@@ -335,6 +349,7 @@ func authenticate(token string, next http.Handler) http.Handler {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 			return
 		}
+		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
 }
